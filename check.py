@@ -1,11 +1,16 @@
 import os
 import pathlib
+import re
 import sys
 
 from playwright.sync_api import sync_playwright
 
 URL = "https://sunsetpadel.at/events"
 SNAP = pathlib.Path("events.txt")
+
+# True  = email on ANY change of the participant count (can be often)
+# False = email only when a FULL event gets a free spot
+ALERT_ON_ANY_COUNT_CHANGE = True
 
 
 def set_output(value):
@@ -35,27 +40,64 @@ start = lines.index("Upcoming Events")
 end = lines.index("Past Events", start) if "Past Events" in lines[start:] else len(lines)
 section = lines[start + 1:end]
 
-# An event title is the line right before its date line,
-# e.g. "Thursday 12 November at 18:00 ... (Austria) ..."
-titles = [
-    section[i - 1]
-    for i in range(1, len(section))
+# Each event: title line, then a date line, then description,
+# then "N / M participants".
+date_idx = [
+    i for i in range(1, len(section))
     if "(Austria)" in section[i] and " at " in section[i]
 ]
 
-old = set(SNAP.read_text().splitlines()) if SNAP.exists() else None
-SNAP.write_text("\n".join(titles) + "\n")
+events = {}
+for n, i in enumerate(date_idx):
+    title = section[i - 1]
+    stop = date_idx[n + 1] - 1 if n + 1 < len(date_idx) else len(section)
+    count = cap = None
+    for l in section[i + 1:stop]:
+        m = re.search(r"(\d+)\s*/\s*(\d+)\s*participants", l)
+        if m:
+            count, cap = int(m.group(1)), int(m.group(2))
+            break
+    events[title] = (count, cap)
 
-if old is None:
+# Load the previous snapshot (lines look like: "Title | 20 / 45").
+first_run = not SNAP.exists()
+old = {}
+if not first_run:
+    for l in SNAP.read_text().splitlines():
+        if not l.strip():
+            continue
+        t, _, rest = l.partition(" | ")
+        m = re.match(r"(\d+) / (\d+)", rest)
+        old[t] = (int(m.group(1)), int(m.group(2))) if m else None
+
+# Save the new snapshot.
+out = []
+for t, (c, cap) in events.items():
+    out.append(f"{t} | {c} / {cap}" if c is not None else f"{t} | ?")
+SNAP.write_text("\n".join(out) + "\n")
+
+if first_run:
     print("First run: baseline saved, no alert.")
     set_output("false")
+    sys.exit(0)
+
+msgs = []
+for t, (c, cap) in events.items():
+    if t not in old:
+        msgs.append(f"NEW EVENT: {t} ({c} / {cap} participants)")
+    elif old[t] is not None and c is not None:
+        oc, ocap = old[t]
+        if oc != c:
+            if ALERT_ON_ANY_COUNT_CHANGE:
+                msgs.append(f"PARTICIPANTS: {t}: {oc} -> {c} / {cap}")
+            elif oc >= ocap and c < cap:
+                msgs.append(f"SPOT FREE: {t}: {oc} -> {c} / {cap}")
+
+if msgs:
+    print("CHANGES:")
+    for m in msgs:
+        print("  +", m)
+    set_output("true")
 else:
-    new = [t for t in titles if t not in old]
-    if new:
-        print("NEW EVENTS:")
-        for t in new:
-            print("  +", t)
-        set_output("true")
-    else:
-        print("No new events. Currently listed:", len(titles))
-        set_output("false")
+    print("No changes. Events listed:", len(events))
+    set_output("false")
