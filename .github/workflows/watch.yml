@@ -34,7 +34,7 @@ jobs:
           git add events.txt
           if ! git diff --cached --quiet; then
             git commit -m "Update snapshot"
-            git push
+            git pull --rebase && git push
           fi
 
       # Fails on purpose when something new appears, so GitHub emails you.
