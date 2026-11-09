@@ -25,25 +25,37 @@ with sync_playwright() as p:
 
 lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-# If the page came back (almost) empty, fail loudly so you get an email
-# instead of silently missing events.
-if len(lines) < 5:
-    print("Page looks empty, the site may have changed or blocked the check.")
+# Fail loudly (you get an email) if the page looks broken.
+if len(lines) < 5 or "Upcoming Events" not in lines:
+    print("Page looks empty or changed, the script may need a fix.")
     sys.exit(2)
 
+# Only look at the "Upcoming Events" section, ignore past events.
+start = lines.index("Upcoming Events")
+end = lines.index("Past Events", start) if "Past Events" in lines[start:] else len(lines)
+section = lines[start + 1:end]
+
+# An event title is the line right before its date line,
+# e.g. "Thursday 12 November at 18:00 ... (Austria) ..."
+titles = [
+    section[i - 1]
+    for i in range(1, len(section))
+    if "(Austria)" in section[i] and " at " in section[i]
+]
+
 old = set(SNAP.read_text().splitlines()) if SNAP.exists() else None
-SNAP.write_text("\n".join(lines) + "\n")
+SNAP.write_text("\n".join(titles) + "\n")
 
 if old is None:
     print("First run: baseline saved, no alert.")
     set_output("false")
 else:
-    new = [l for l in lines if l not in old]
+    new = [t for t in titles if t not in old]
     if new:
-        print("NEW LINES ON PAGE:")
-        for l in new:
-            print("  +", l)
+        print("NEW EVENTS:")
+        for t in new:
+            print("  +", t)
         set_output("true")
     else:
-        print("No changes.")
+        print("No new events. Currently listed:", len(titles))
         set_output("false")
