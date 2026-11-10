@@ -2,7 +2,7 @@ name: Watch events
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every hour at minute 7
+    - cron: "*/5 * * * *"   # every hour at minute 7
   workflow_dispatch:       # lets you run it manually
 
 permissions:
