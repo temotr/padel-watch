@@ -21,7 +21,7 @@ jobs:
       - name: Install browser
         run: |
           pip install playwright
-          playwright install --with-deps chromium
+          playwright install chromium
 
       - name: Check page
         id: check
