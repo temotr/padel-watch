@@ -23,6 +23,14 @@ def set_output(value):
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page()
+    # Skip images, fonts and videos: we only need the text, and this
+    # keeps the load on the website small.
+    page.route(
+        "**/*",
+        lambda route: route.abort()
+        if route.request.resource_type in ("image", "font", "media")
+        else route.continue_(),
+    )
     page.goto(URL, wait_until="networkidle")
     page.wait_for_timeout(3000)
     text = page.inner_text("body")
