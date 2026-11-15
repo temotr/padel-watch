@@ -40,6 +40,9 @@ jobs:
       # Fails on purpose when something new appears, so GitHub emails you.
       - name: Alert on change
         if: steps.check.outputs.changed == 'true'
+        env:
+          SUMMARY: ${{ steps.check.outputs.summary }}
         run: |
-          echo "::error::New content on the events page. Open the 'Check page' step to see what."
+          echo "::error::$SUMMARY"
           exit 1
+
