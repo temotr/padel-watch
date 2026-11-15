@@ -8,10 +8,6 @@ from playwright.sync_api import sync_playwright
 URL = "https://sunsetpadel.at/events"
 SNAP = pathlib.Path("events.txt")
 
-# True  = email on ANY change of the participant count (can be often)
-# False = email only when a FULL event gets a free spot
-ALERT_ON_ANY_COUNT_CHANGE = True
-
 
 def set_output(value):
     path = os.environ.get("GITHUB_OUTPUT")
@@ -95,16 +91,18 @@ for t, (c, cap) in events.items():
         msgs.append(f"NEW EVENT: {t} ({c} / {cap} participants)")
     elif old[t] is not None and c is not None:
         oc, ocap = old[t]
-        if oc != c:
-            if ALERT_ON_ANY_COUNT_CHANGE:
-                msgs.append(f"PARTICIPANTS: {t}: {oc} -> {c} / {cap}")
-            elif oc >= ocap and c < cap:
-                msgs.append(f"SPOT FREE: {t}: {oc} -> {c} / {cap}")
+        if c < oc:
+            msgs.append(f"PARTICIPANTS DOWN: {t}: {oc} -> {c} / {cap}")
 
 if msgs:
     print("CHANGES:")
     for m in msgs:
         print("  +", m)
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        summary = " | ".join(msgs).replace("\n", " ").replace("\r", " ")
+        with open(path, "a") as f:
+            f.write(f"summary={summary}\n")
     set_output("true")
 else:
     print("No changes. Events listed:", len(events))
