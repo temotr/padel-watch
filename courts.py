@@ -198,13 +198,23 @@ def ingest(data, free, names, seen_dates, seen_slots, stats=None, only_date=None
     return n_total, n_free
 
 
+NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
+
+
+def loc_label(loc):
+    """'3️⃣ Padeldome Süßenbrunn' - the number is the position in LOCATIONS."""
+    names = dict(LOCATIONS)
+    idx = [l for l, _ in LOCATIONS].index(loc) if loc in names else None
+    num = NUMBERS[idx] if idx is not None and idx < len(NUMBERS) else "•"
+    return f"{num} {names.get(loc, loc)}"
+
+
 def describe(items):
     """items: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
 
-    Tuesday 17-11-2026
-    • Padeldome Erdberg · Platz 2 · 18:00-20:00
+    📅 Tuesday 17-11-2026
+    2️⃣ Padeldome Erdberg · Platz 2 · 18:00-20:00
     """
-    loc_names = dict(LOCATIONS)
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
     keys = sorted(items, key=lambda k: (k[1], order.get(k[0], 99), k[2]))
     shown, extra = keys[:MAX_WINDOWS], max(0, len(keys) - MAX_WINDOWS)
@@ -216,33 +226,67 @@ def describe(items):
             d = dt.date.fromisoformat(date)
             if lines:
                 lines.append("")
-            lines.append(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}")
-        lines.append(f"• {loc_names.get(loc, loc)} · {items[(loc, date, hhmm)]}")
+            lines.append(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}")
+        lines.append(f"{loc_label(loc)} · {items[(loc, date, hhmm)]}")
     if extra:
         lines.append("")
         lines.append(f"... and {extra} more")
     return lines
 
 
+def describe_still(items):
+    """Compact lines for windows that were free before and still are."""
+    order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
+    grouped = {}
+    for loc, date, hhmm in items:
+        grouped.setdefault((date, loc), []).append(hhmm)
+    lines = []
+    for (date, loc) in sorted(grouped, key=lambda k: (k[0], order.get(k[1], 99))):
+        times = sorted(grouped[(date, loc)])
+        d = dt.date.fromisoformat(date)
+        n = len(times)
+        span = times[0] if n == 1 else f"{times[0]}-{times[-1]}"
+        lines.append(
+            f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d-%m} · {loc_label(loc)} · "
+            f"{n} {'window' if n == 1 else 'windows'}, start {span}"
+        )
+    return lines
+
+
+def conditions_text():
+    days = sorted(WEEKDAYS)
+    names = [WEEKDAY_NAMES[i][:3] for i in days]
+    contiguous = days == list(range(days[0], days[-1] + 1))
+    day_txt = f"{names[0]}-{names[-1]}" if contiguous and len(names) > 1 else ", ".join(names)
+    hours = DURATION_MIN / 60
+    hours_txt = f"{hours:g}h"
+    return f"{day_txt} · {hours_txt} window · start {START_TIMES[0]}-{START_TIMES[-1]}"
+
+
+def header_lines(now):
+    return [f"🕒 Checking time of the code: {now:%d.%m.%Y %H:%M}",
+            f"📋 Conditions for booking: {conditions_text()}"]
+
+
 def coverage_footer(report, now):
     """report: {loc: [(date, slots, windows, ok), ...]} -> lines for the end of a push."""
-    loc_names = dict(LOCATIONS)
-    lines = ["---", f"Checked {now:%d.%m. %H:%M} (Mon-Thu, 2h, start {START_TIMES[0]}-{START_TIMES[-1]}):"]
+    lines = ["🔎 DAYS CHECKED"]
     for loc, _ in LOCATIONS:
         rows = report.get(loc)
         if rows is None:
             continue
-        free = [f"{d:%d.%m} ({n} windows)" if n != 1 else f"{d:%d.%m} (1 window)"
+        free = [f"{d:%d.%m} ({n} {'window' if n == 1 else 'windows'})"
                 for d, slots, n, ok in rows if n]
         none = [f"{d:%d.%m}" for d, slots, n, ok in rows if ok and not n]
         bad = [f"{d:%d.%m}" for d, slots, n, ok in rows if not ok and not n]
-        lines.append(loc_names.get(loc, loc))
+        lines.append("")
+        lines.append(loc_label(loc))
         if free:
             lines.append("✅ free: " + ", ".join(free))
         if none:
             lines.append("– none fit: " + ", ".join(none))
         if bad:
-            lines.append("⚠ not read / not bookable yet: " + ", ".join(bad))
+            lines.append("⚠️ not read / not bookable yet: " + ", ".join(bad))
     return lines
 
 
@@ -372,18 +416,19 @@ def run_all(page, today=None, now=None):
 
     show = current if first_run else new
     if first_run or new:
-        lines = describe(show)
+        sections = ["\n".join(header_lines(now))]
         if first_run:
-            if lines:
-                msg = "Free right now:\n" + "\n".join(lines)
-            else:
-                msg = ("No matching 2h window is free right now. "
-                       "You will get a message when one opens.")
+            body = describe(show) or ["No matching 2h window is free right now.",
+                                      "You will get a message when one opens."]
+            sections.append("\n".join(["🟢 FREE RIGHT NOW (first check)", ""] + body))
         else:
-            msg = "\n".join(lines)
+            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST CHECK", ""] + describe(show)))
+            still = {k: v for k, v in current.items() if k not in new}
+            if still:
+                sections.append("\n".join(["♻️ STILL FREE (reported before)"] + describe_still(still)))
+        sections.append("\n".join(coverage_footer(report, now)))
         first_loc = sorted(show)[0][0] if show else LOCATIONS[0][0]
-        msg += "\n\n" + "\n".join(coverage_footer(report, now))
-        notify(make_title(show, first_run), msg, f"{BASE}?c={first_loc}")
+        notify(make_title(show, first_run), "\n\n".join(sections), f"{BASE}?c={first_loc}")
 
     save_state(current)
 
