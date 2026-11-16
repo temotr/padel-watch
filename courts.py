@@ -165,7 +165,7 @@ def find_windows(free, names, targets):
     return out
 
 
-def ingest(data, free, names, seen_dates, seen_slots):
+def ingest(data, free, names, seen_dates, seen_slots, stats=None):
     """Add one page's slots to the collected data. Returns (total, free) counts."""
     ppm = data["pxPerMin"] or (25 / 30)
     n_total = n_free = 0
@@ -178,6 +178,13 @@ def ingest(data, free, names, seen_dates, seen_slots):
         date = dt.datetime.fromtimestamp(begin, TZ).date()
         seen_dates.add(date)
         n_total += 1
+        if stats is not None:
+            row = stats.setdefault(date, [0, 0, 0])  # slots, free, free at 18:00-21:59
+            row[0] += 1
+            if is_free:
+                row[1] += 1
+                if 18 <= dt.datetime.fromtimestamp(begin, TZ).hour <= 21:
+                    row[2] += 1
         if is_free:
             n_free += 1
             free.setdefault((cid, date), []).append((begin, begin + height / ppm * 60))
@@ -272,6 +279,7 @@ def run_all(page, today=None):
     for loc, loc_name in LOCATIONS:
         free, names = {}, {}
         seen_dates, seen_slots = set(), set()
+        stats = {}
         total = 0
         for target in targets:
             if target in seen_dates:
@@ -282,10 +290,19 @@ def run_all(page, today=None):
             except Exception as exc:  # noqa: BLE001
                 print(f"WARNING: {loc_name}: could not read {target}: {exc}")
                 continue
-            n_total, n_free = ingest(data, free, names, seen_dates, seen_slots)
+            n_total, n_free = ingest(data, free, names, seen_dates, seen_slots, stats)
             total += n_total
             print(f"{loc_name} {target}: {n_total} slots on page, {n_free} free")
             time.sleep(1)  # be gentle with the website
+
+        overview = ", ".join(
+            f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m}: {s[0]} slots, {s[1]} free, {s[2]} free 18-22h"
+            for d, s in sorted(stats.items()) if d in set(targets)
+        )
+        not_found = [f"{d:%d.%m}" for d in targets if d not in seen_dates]
+        print(f"OVERVIEW {loc_name}: {overview or 'nothing'}")
+        if not_found:
+            print(f"WARNING: {loc_name}: days not found on the page: {', '.join(not_found)}")
 
         if total == 0:
             print(f"WARNING: {loc_name}: no slots found, keeping previous state.")
