@@ -1,7 +1,9 @@
 """Watches free padel courts at several Padeldome locations and sends an ntfy push.
 
-A court is reported when it is free for a full 2-hour window that starts
-at one of START_TIMES, on Monday-Thursday within the next 14 days.
+A 2-hour window is reported when it starts at one of START_TIMES, on
+Monday-Thursday within the next 14 days, and is free at one location either
+on a single court or on several courts directly after each other
+(e.g. Platz 1 18:00-19:00 + Platz 2 19:00-20:00).
 You get a message only when such a window is NEWLY free.
 """
 import datetime as dt
@@ -23,14 +25,14 @@ LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
 ]
 DAYS_AHEAD = 14                 # look this many days ahead (including today)
 WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
-START_TIMES = ["18:00", "18:30", "19:00", "19:30"]
+START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
 DURATION_MIN = 120              # a court must be free for this long
 MAX_LINES = 40                  # max lines in one notification
 SNAP = pathlib.Path("courts_state.txt")
 # --------------------------------------------------------------------------
 
 TZ = ZoneInfo("Europe/Vienna")
-STATE_HEADER = "# v2"
+STATE_HEADER = "# v3"
 
 JS = """
 () => {
@@ -85,19 +87,82 @@ def covers(merged, s, e, tol=120):
     return any(a <= s + tol and b >= e - tol for a, b in merged)
 
 
-def find_matches(free, targets):
-    """free: {(cid, date): [(start_ts, end_ts), ...]} -> set of (date_iso, cid, 'HH:MM')."""
-    matches = set()
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                 "Saturday", "Sunday"]
+
+
+def hhmm_of(ts):
+    return dt.datetime.fromtimestamp(ts, TZ).strftime("%H:%M")
+
+
+def half_hour(ts):
+    """Round a timestamp to the nearest :00 / :30 (page pixels are not exact)."""
+    return round(ts / 1800) * 1800
+
+
+def chain(courts_, order, s, e, tol=120):
+    """Cover [s, e] with free intervals of several courts, fewest changes.
+
+    courts_: {cid: merged free intervals}. Returns [(cid, from_ts, to_ts)] or None.
+    """
+    t = s
+    segs = []
+    while t < e - tol:
+        best = None
+        for cid, merged in courts_.items():
+            for a, b in merged:
+                if a <= t + tol and b > t + tol:
+                    cand = (b, -order.get(cid, 999), cid)
+                    if best is None or cand > best:
+                        best = cand
+        if best is None or len(segs) >= 8:
+            return None
+        b, _, cid = best
+        segs.append((cid, t, min(b, e)))
+        t = b
+    return segs
+
+
+def find_windows(free, names, targets):
+    """free: {(cid, date): [(start_ts, end_ts), ...]}.
+
+    Returns {(date_iso, 'HH:MM'): 'Platz 3, 19:30-21:30'} for one location.
+    """
+    by_date = {}
     for (cid, date), intervals in free.items():
-        if date not in targets:
-            continue
-        merged = merge(intervals)
+        if date in targets:
+            by_date.setdefault(date, {})[cid] = merge(intervals)
+    order = {cid: i for i, cid in enumerate(names)}
+
+    def nm(cid):
+        return names.get(cid, f"Court {cid}")
+
+    out = {}
+    for date, courts_ in by_date.items():
         for hhmm in START_TIMES:
             h, m = map(int, hhmm.split(":"))
             s = int(dt.datetime.combine(date, dt.time(h, m), TZ).timestamp())
-            if covers(merged, s, s + DURATION_MIN * 60):
-                matches.add((date.isoformat(), cid, hhmm))
-    return matches
+            e = s + DURATION_MIN * 60
+            end_txt = hhmm_of(e)
+            singles = sorted(
+                (c for c, mv in courts_.items() if covers(mv, s, e)),
+                key=lambda c: order.get(c, 999),
+            )
+            if singles:
+                shown = " / ".join(nm(c) for c in singles[:4])
+                if len(singles) > 4:
+                    shown += f" / +{len(singles) - 4} more"
+                out[(date.isoformat(), hhmm)] = f"{shown}, {hhmm}-{end_txt}"
+                continue
+            segs = chain(courts_, order, s, e)
+            if segs:
+                parts = []
+                for i, (cid, a, b) in enumerate(segs):
+                    a_txt = hhmm if i == 0 else hhmm_of(half_hour(a))
+                    b_txt = end_txt if i == len(segs) - 1 else hhmm_of(half_hour(b))
+                    parts.append(f"{nm(cid)} {a_txt}-{b_txt}")
+                out[(date.isoformat(), hhmm)] = " + ".join(parts)
+    return out
 
 
 def ingest(data, free, names, seen_dates, seen_slots):
@@ -120,23 +185,22 @@ def ingest(data, free, names, seen_dates, seen_slots):
 
 
 def describe(items):
-    """items: {(loc, date_iso, cid, hhmm): court_name} -> list of text lines."""
+    """items: {(loc, date_iso, hhmm): text} -> list of text lines."""
     loc_names = dict(LOCATIONS)
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
 
     def sortkey(k):
-        loc, date, cid, hhmm = k
-        num = re.search(r"\d+", items[k])
-        return (date, order.get(loc, 99), int(num.group()) if num else 0, items[k], hhmm)
+        loc, date, hhmm = k
+        return (date, order.get(loc, 99), hhmm)
 
     lines = []
     for k in sorted(items, key=sortkey):
-        loc, date, cid, hhmm = k
+        loc, date, hhmm = k
         d = dt.date.fromisoformat(date)
-        h, m = map(int, hhmm.split(":"))
-        end = (dt.datetime.combine(d, dt.time(h, m))
-               + dt.timedelta(minutes=DURATION_MIN)).strftime("%H:%M")
-        lines.append(f"{d:%d-%m-%Y}, {loc_names.get(loc, loc)}, {items[k]}, {hhmm}-{end}")
+        lines.append(
+            f"{WEEKDAY_NAMES[d.weekday()]}, {d:%d-%m-%Y}, "
+            f"{loc_names.get(loc, loc)}, {items[k]}"
+        )
     return lines
 
 
@@ -161,7 +225,7 @@ def fetch_day(page, url):
 
 
 def load_state():
-    """Returns (first_run, {(loc, date, cid, hhmm): name})."""
+    """Returns (first_run, {(loc, date, hhmm): text})."""
     if not SNAP.exists():
         return True, {}
     lines = SNAP.read_text(encoding="utf-8").splitlines()
@@ -170,15 +234,15 @@ def load_state():
     old = {}
     for l in lines[1:]:
         parts = l.strip().split("|")
-        if len(parts) >= 5:
-            old[tuple(parts[:4])] = "|".join(parts[4:])
+        if len(parts) >= 4:
+            old[tuple(parts[:3])] = "|".join(parts[3:])
     return False, old
 
 
 def save_state(current):
     out = [STATE_HEADER]
-    for (loc, date, cid, hhmm), name in sorted(current.items()):
-        out.append(f"{loc}|{date}|{cid}|{hhmm}|{name}")
+    for (loc, date, hhmm), text in sorted(current.items()):
+        out.append(f"{loc}|{date}|{hhmm}|{text}")
     SNAP.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
@@ -219,8 +283,8 @@ def run_all(page, today=None):
             continue
 
         ok_locations += 1
-        for date_iso, cid, hhmm in find_matches(free, set(targets)):
-            current[(loc, date_iso, cid, hhmm)] = names.get(cid, f"Court {cid}")
+        for (date_iso, hhmm), text in find_windows(free, names, set(targets)).items():
+            current[(loc, date_iso, hhmm)] = text
         # Days we could not load keep their old state (no false "new" alerts).
         missing = {d.isoformat() for d in targets if d not in seen_dates}
         for k, v in old.items():
