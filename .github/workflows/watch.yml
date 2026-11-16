@@ -47,7 +47,8 @@ jobs:
       - name: Alert on change
         if: steps.check.outputs.changed == 'true'
         env:
+          TITLE: ${{ steps.check.outputs.title }}
           SUMMARY: ${{ steps.check.outputs.summary }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          curl -s -H "Title: Sun Set Padel events" -H "Tags: calendar" -H "Priority: high" -H "Click: https://sunsetpadel.at/events" -d "$SUMMARY" "https://ntfy.sh/$NTFY_TOPIC"
+          curl -s -H "Title: $TITLE" -H "Tags: calendar" -H "Priority: high" -H "Click: https://sunsetpadel.at/events" -d "$SUMMARY" "https://ntfy.sh/$NTFY_TOPIC"
