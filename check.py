@@ -1,10 +1,13 @@
+import datetime as dt
 import os
 import pathlib
 import re
 import sys
+from zoneinfo import ZoneInfo
 
 URL = "https://sunsetpadel.at/events"
 SNAP = pathlib.Path("events.txt")
+TZ = ZoneInfo("Europe/Vienna")
 
 
 def set_output(name, value):
@@ -70,6 +73,7 @@ def load_old():
 
 
 MAX_EVENT_LINES = 40
+CONDITIONS = "new event · fewer participants than before"
 
 
 def event_line(title, e):
@@ -77,33 +81,56 @@ def event_line(title, e):
     return f"{title} ({c} / {cap} participants)" if c is not None else title
 
 
-def build_changes(events, old):
+def build_changes(events, old, now=None):
     """Returns (title, message) or None when nothing changed.
 
-    The message lists the changes first (highlighted), then all other current
-    events, one line each.
+    Layout: checking time and conditions, then the changes (new events,
+    fewer participants), then all other current events, then a data check.
     """
-    changed = []   # highlighted lines
-    changed_titles = set()
+    now = now or dt.datetime.now(TZ)
+    new_lines, down_lines, changed = [], [], set()
     for t, e in events.items():
         c, cap = e["count"], e["cap"]
         if t not in old:
-            changed.append(f"🆕 NEW EVENT: {event_line(t, e)}")
-            changed_titles.add(t)
+            new_lines.append(event_line(t, e))
+            changed.add(t)
         elif old[t] is not None and c is not None:
             oc, ocap = old[t]
             if c < oc:
-                changed.append(f"🔻 PARTICIPANTS DOWN: {t}: {oc} -> {c} / {cap}")
-                changed_titles.add(t)
-    if not changed:
+                down_lines.append(f"{t}: {oc} -> {c} / {cap}")
+                changed.add(t)
+    if not new_lines and not down_lines:
         return None
-    others = [event_line(t, e) for t, e in events.items() if t not in changed_titles]
-    lines = changed[:]
+
+    others = [event_line(t, e) for t, e in events.items() if t not in changed]
+    sections = ["\n".join([
+        f"🕒 Checking time of the code: {now:%d.%m.%Y %H:%M}",
+        f"📋 Conditions for notification: {CONDITIONS}",
+    ])]
+    if new_lines:
+        sections.append("\n".join(["🆕 NEW EVENTS SINCE LAST CHECK", ""] + new_lines))
+    if down_lines:
+        sections.append("\n".join(["🔻 PARTICIPANTS DOWN SINCE LAST CHECK", ""] + down_lines))
     if others:
-        lines += ["", "Other current events:"] + others
-    if len(lines) > MAX_EVENT_LINES:
-        lines = lines[:MAX_EVENT_LINES] + ["..."]
-    return "Sun Set Padel", "\n".join(lines)
+        sections.append("\n".join(["♻️ OTHER CURRENT EVENTS (no change)", ""] + others))
+    sections.append("\n".join([
+        "🔎 EVENTS CHECKED",
+        "",
+        f"{len(events)} upcoming events read from sunsetpadel.at/events (last check: {len(old)})",
+    ]))
+
+    parts = []
+    if new_lines:
+        parts.append(f"{len(new_lines)} new event" + ("s" if len(new_lines) > 1 else ""))
+    if down_lines:
+        parts.append(f"{len(down_lines)} spot update" + ("s" if len(down_lines) > 1 else ""))
+    title = "Sun Set Padel: " + ", ".join(parts)
+
+    message = "\n\n".join(sections)
+    lines = message.split("\n")
+    if len(lines) > MAX_EVENT_LINES + 12:
+        message = "\n".join(lines[:MAX_EVENT_LINES + 12]) + "\n..."
+    return title, message
 
 
 def main():
