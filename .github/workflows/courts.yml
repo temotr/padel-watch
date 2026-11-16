@@ -1,0 +1,44 @@
+name: Watch courts
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"   # backup schedule, every 30 minutes
+  workflow_dispatch:
+
+concurrency:
+  group: courts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  courts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install browser
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      - name: Check courts
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python courts.py
+
+      - name: Save snapshot
+        run: |
+          git config user.name "watcher"
+          git config user.email "watcher@users.noreply.github.com"
+          git add courts_state.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Update court snapshot"
+            git pull --rebase
+            git push
+          fi
