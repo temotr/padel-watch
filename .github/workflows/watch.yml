@@ -2,8 +2,12 @@ name: Watch events
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every hour at minute 7
-  workflow_dispatch:       # lets you run it manually
+    - cron: "7,37 * * * *"   # backup schedule, every 30 minutes
+  workflow_dispatch:         # lets cron-job.org and you start it
+
+concurrency:
+  group: events
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -34,15 +38,16 @@ jobs:
           git add events.txt
           if ! git diff --cached --quiet; then
             git commit -m "Update snapshot"
-            git pull --rebase && git push
+            for i in 1 2 3; do
+              git pull --rebase && git push && break
+              sleep 5
+            done
           fi
 
-      # Fails on purpose when something new appears, so GitHub emails you.
       - name: Alert on change
         if: steps.check.outputs.changed == 'true'
         env:
           SUMMARY: ${{ steps.check.outputs.summary }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
-          curl -s -H "Title: Padel events" -H "Priority: high" -d "$SUMMARY" "https://ntfy.sh/$NTFY_TOPIC"
-
+          curl -s -H "Title: Sun Set Padel events" -H "Tags: calendar" -H "Priority: high" -H "Click: https://sunsetpadel.at/events" -d "$SUMMARY" "https://ntfy.sh/$NTFY_TOPIC"
