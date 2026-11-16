@@ -7,11 +7,13 @@ on a single court or on several courts directly after each other
 You get a message only when such a window is NEWLY free.
 """
 import datetime as dt
+import json
 import os
 import pathlib
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
@@ -277,17 +279,51 @@ def make_title(show, first_run):
     return "Free padel court" if len(show) == 1 else f"{len(show)} free padel windows"
 
 
-def notify(title, message, click, tags="tennis"):
-    topic = os.environ.get("NTFY_TOPIC")
-    if not topic:
-        print("NTFY_TOPIC secret is missing.")
-        sys.exit(3)
+def send_telegram(title, message, click):
+    """Optional second channel. Needs the secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat:
+        return False
+    text = f"🎾 {title}\n\n{message}"
+    if len(text) > 4000:  # Telegram's limit is 4096 characters
+        text = text[:3990] + "\n…"
+    data = {
+        "chat_id": chat,
+        "text": text,
+        "disable_web_page_preview": "true",
+        "reply_markup": json.dumps(
+            {"inline_keyboard": [[{"text": "Open booking page", "url": click}]]}
+        ),
+    }
     req = urllib.request.Request(
-        f"https://ntfy.sh/{topic}",
-        data=message.encode("utf-8"),
-        headers={"Title": title, "Priority": "high", "Click": click, "Tags": tags},
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=urllib.parse.urlencode(data).encode("utf-8"),
     )
-    urllib.request.urlopen(req, timeout=20).read()
+    try:
+        urllib.request.urlopen(req, timeout=20).read()
+        return True
+    except Exception as exc:  # noqa: BLE001  (never print the URL: it contains the token)
+        print(f"WARNING: Telegram message failed ({type(exc).__name__}).")
+        return False
+
+
+def notify(title, message, click, tags="tennis"):
+    sent = False
+    topic = os.environ.get("NTFY_TOPIC")
+    if topic:
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode("utf-8"),
+            headers={"Title": title, "Priority": "high", "Click": click, "Tags": tags},
+        )
+        urllib.request.urlopen(req, timeout=20).read()
+        sent = True
+    if send_telegram(title, message, click):
+        sent = True
+    if not sent:
+        print("No notification channel is configured (NTFY_TOPIC or Telegram secrets).")
+        sys.exit(3)
 
 
 def fetch_day(page, url):
