@@ -92,31 +92,31 @@ def build_changes(events, old, now=None):
     for t, e in events.items():
         c, cap = e["count"], e["cap"]
         if t not in old:
-            new_lines.append(event_line(t, e))
+            new_lines.append("🆕 " + event_line(t, e))
             changed.add(t)
         elif old[t] is not None and c is not None:
             oc, ocap = old[t]
             if c < oc:
-                down_lines.append(f"{t}: {oc} -> {c} / {cap}")
+                down_lines.append(f"🔻 {t}: {oc} -> {c} / {cap}")
                 changed.add(t)
     if not new_lines and not down_lines:
         return None
 
     others = [event_line(t, e) for t, e in events.items() if t not in changed]
     sections = ["\n".join([
-        f"🕒 Checking time of the code: {now:%d.%m.%Y %H:%M}",
+        f"🕒 Execution time of the agent: {now:%d.%m.%Y %H:%M}",
         f"📋 Conditions for notification: {CONDITIONS}",
     ])]
     if new_lines:
-        sections.append("\n".join(["🆕 NEW EVENTS SINCE LAST CHECK", ""] + new_lines))
+        sections.append("\n".join(["🆕 NEW EVENTS SINCE LAST RUN", ""] + new_lines))
     if down_lines:
-        sections.append("\n".join(["🔻 PARTICIPANTS DOWN SINCE LAST CHECK", ""] + down_lines))
+        sections.append("\n".join(["🔻 PARTICIPANTS DOWN SINCE LAST RUN", ""] + down_lines))
     if others:
         sections.append("\n".join(["♻️ OTHER CURRENT EVENTS (no change)", ""] + others))
     sections.append("\n".join([
         "🔎 EVENTS CHECKED",
         "",
-        f"{len(events)} upcoming events read from sunsetpadel.at/events (last check: {len(old)})",
+        f"{len(events)} upcoming events read from sunsetpadel.at/events (last run: {len(old)})",
     ]))
 
     parts = []
