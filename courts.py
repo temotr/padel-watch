@@ -23,7 +23,7 @@ LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
     ("2667", "Padeldome Süßenbrunn"),
     ("3216", "Padeldome Alte Donau"),
 ]
-DAYS_AHEAD = 14                 # look this many days ahead (including today)
+DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
 WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
 START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
 DURATION_MIN = 120              # a court must be free for this long
@@ -64,8 +64,9 @@ JS = """
   courts.forEach((court) => {
     court.querySelectorAll(":scope > .slot").forEach((s) => {
       const r = s.getBoundingClientRect();
-      const free = s.classList.contains("av") && !s.classList.contains("res");
-      slots.push([court.dataset.cid, Number(s.dataset.begin), r.height, free]);
+      const res = s.classList.contains("res");
+      const free = s.classList.contains("av") && !res;
+      slots.push([court.dataset.cid, Number(s.dataset.begin), r.height, free, res]);
     });
   });
   return { pxPerMin: pxPerMin, names: names, slots: slots };
@@ -165,26 +166,32 @@ def find_windows(free, names, targets):
     return out
 
 
-def ingest(data, free, names, seen_dates, seen_slots, stats=None):
+def ingest(data, free, names, seen_dates, seen_slots, stats=None, only_date=None):
     """Add one page's slots to the collected data. Returns (total, free) counts."""
     ppm = data["pxPerMin"] or (25 / 30)
     n_total = n_free = 0
     for cid, name in data["names"].items():
         names.setdefault(cid, name)
-    for cid, begin, height, is_free in data["slots"]:
+    for cid, begin, height, is_free, is_res in data["slots"]:
         if begin <= 0 or (cid, begin) in seen_slots:
             continue
-        seen_slots.add((cid, begin))
         date = dt.datetime.fromtimestamp(begin, TZ).date()
+        if only_date is not None and date != only_date:
+            continue  # other days on the page are not fully loaded: ignore them
+        seen_slots.add((cid, begin))
         seen_dates.add(date)
         n_total += 1
         if stats is not None:
-            row = stats.setdefault(date, [0, 0, 0])  # slots, free, free at 18:00-21:59
+            row = stats.setdefault(date, [0, 0, 0, 0])
+            # slots, free, free at 18:00-21:59, evening slots that are free or booked
             row[0] += 1
+            evening = 18 <= dt.datetime.fromtimestamp(begin, TZ).hour <= 21
             if is_free:
                 row[1] += 1
-                if 18 <= dt.datetime.fromtimestamp(begin, TZ).hour <= 21:
+                if evening:
                     row[2] += 1
+            if evening and (is_free or is_res):
+                row[3] += 1
         if is_free:
             n_free += 1
             free.setdefault((cid, date), []).append((begin, begin + height / ppm * 60))
@@ -214,6 +221,28 @@ def describe(items):
     if extra:
         lines.append("")
         lines.append(f"... and {extra} more")
+    return lines
+
+
+def coverage_footer(report, now):
+    """report: {loc: [(date, slots, windows, ok), ...]} -> lines for the end of a push."""
+    loc_names = dict(LOCATIONS)
+    lines = ["---", f"Checked {now:%d.%m. %H:%M} (Mon-Thu, 2h, start {START_TIMES[0]}-{START_TIMES[-1]}):"]
+    for loc, _ in LOCATIONS:
+        rows = report.get(loc)
+        if rows is None:
+            continue
+        free = [f"{d:%d.%m} ({n} windows)" if n != 1 else f"{d:%d.%m} (1 window)"
+                for d, slots, n, ok in rows if n]
+        none = [f"{d:%d.%m}" for d, slots, n, ok in rows if ok and not n]
+        bad = [f"{d:%d.%m}" for d, slots, n, ok in rows if not ok and not n]
+        lines.append(loc_names.get(loc, loc))
+        if free:
+            lines.append("✅ free: " + ", ".join(free))
+        if none:
+            lines.append("– none fit: " + ", ".join(none))
+        if bad:
+            lines.append("⚠ not read / not bookable yet: " + ", ".join(bad))
     return lines
 
 
@@ -265,8 +294,9 @@ def save_state(current):
     SNAP.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def run_all(page, today=None):
-    today = today or dt.datetime.now(TZ).date()
+def run_all(page, today=None, now=None):
+    now = now or dt.datetime.now(TZ)
+    today = today or now.date()
     targets = [
         today + dt.timedelta(days=i)
         for i in range(DAYS_AHEAD)
@@ -274,6 +304,7 @@ def run_all(page, today=None):
     ]
     first_run, old = load_state()
     current = {}
+    report = {}
     ok_locations = 0
 
     for loc, loc_name in LOCATIONS:
@@ -290,7 +321,7 @@ def run_all(page, today=None):
             except Exception as exc:  # noqa: BLE001
                 print(f"WARNING: {loc_name}: could not read {target}: {exc}")
                 continue
-            n_total, n_free = ingest(data, free, names, seen_dates, seen_slots, stats)
+            n_total, n_free = ingest(data, free, names, seen_dates, seen_slots, stats, only_date=target)
             total += n_total
             print(f"{loc_name} {target}: {n_total} slots on page, {n_free} free")
             time.sleep(1)  # be gentle with the website
@@ -309,11 +340,23 @@ def run_all(page, today=None):
             for k, v in old.items():
                 if k[0] == loc:
                     current[k] = v
+            report[loc] = [(d, 0, 0, False) for d in targets]
             continue
 
         ok_locations += 1
-        for (date_iso, hhmm), text in find_windows(free, names, set(targets)).items():
+        windows = find_windows(free, names, set(targets))
+        per_day = {}
+        for (date_iso, hhmm), text in windows.items():
             current[(loc, date_iso, hhmm)] = text
+            per_day[date_iso] = per_day.get(date_iso, 0) + 1
+        rows = []
+        for d in targets:
+            s = stats.get(d, [0, 0, 0, 0])
+            # A day counts as "read" when evening slots (free or booked) were found.
+            # Today is exempt: its evening slots may already be in the past.
+            ok = d in seen_dates and (s[3] > 0 or d == today)
+            rows.append((d, s[0], per_day.get(d.isoformat(), 0), ok))
+        report[loc] = rows
         # Days we could not load keep their old state (no false "new" alerts).
         missing = {d.isoformat() for d in targets if d not in seen_dates}
         for k, v in old.items():
@@ -339,6 +382,7 @@ def run_all(page, today=None):
         else:
             msg = "\n".join(lines)
         first_loc = sorted(show)[0][0] if show else LOCATIONS[0][0]
+        msg += "\n\n" + "\n".join(coverage_footer(report, now))
         notify(make_title(show, first_run), msg, f"{BASE}?c={first_loc}")
 
     save_state(current)
