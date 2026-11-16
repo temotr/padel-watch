@@ -27,7 +27,7 @@ DAYS_AHEAD = 14                 # look this many days ahead (including today)
 WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
 START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
 DURATION_MIN = 120              # a court must be free for this long
-MAX_LINES = 40                  # max lines in one notification
+MAX_WINDOWS = 25                # max windows listed in one notification
 SNAP = pathlib.Path("courts_state.txt")
 # --------------------------------------------------------------------------
 
@@ -152,7 +152,7 @@ def find_windows(free, names, targets):
                 shown = " / ".join(nm(c) for c in singles[:4])
                 if len(singles) > 4:
                     shown += f" / +{len(singles) - 4} more"
-                out[(date.isoformat(), hhmm)] = f"{shown}, {hhmm}-{end_txt}"
+                out[(date.isoformat(), hhmm)] = f"{shown} · {hhmm}-{end_txt}"
                 continue
             segs = chain(courts_, order, s, e)
             if segs:
@@ -185,26 +185,38 @@ def ingest(data, free, names, seen_dates, seen_slots):
 
 
 def describe(items):
-    """items: {(loc, date_iso, hhmm): text} -> list of text lines."""
+    """items: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
+
+    Tuesday 17-11-2026
+    • Padeldome Erdberg · Platz 2 · 18:00-20:00
+    """
     loc_names = dict(LOCATIONS)
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
+    keys = sorted(items, key=lambda k: (k[1], order.get(k[0], 99), k[2]))
+    shown, extra = keys[:MAX_WINDOWS], max(0, len(keys) - MAX_WINDOWS)
 
-    def sortkey(k):
-        loc, date, hhmm = k
-        return (date, order.get(loc, 99), hhmm)
-
-    lines = []
-    for k in sorted(items, key=sortkey):
-        loc, date, hhmm = k
-        d = dt.date.fromisoformat(date)
-        lines.append(
-            f"{WEEKDAY_NAMES[d.weekday()]}, {d:%d-%m-%Y}, "
-            f"{loc_names.get(loc, loc)}, {items[k]}"
-        )
+    lines, current_day = [], None
+    for loc, date, hhmm in shown:
+        if date != current_day:
+            current_day = date
+            d = dt.date.fromisoformat(date)
+            if lines:
+                lines.append("")
+            lines.append(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}")
+        lines.append(f"• {loc_names.get(loc, loc)} · {items[(loc, date, hhmm)]}")
+    if extra:
+        lines.append("")
+        lines.append(f"... and {extra} more")
     return lines
 
 
-def notify(title, message, click):
+def make_title(show, first_run):
+    if first_run:
+        return "Court watcher started"
+    return "Free padel court" if len(show) == 1 else f"{len(show)} free padel windows"
+
+
+def notify(title, message, click, tags="tennis"):
     topic = os.environ.get("NTFY_TOPIC")
     if not topic:
         print("NTFY_TOPIC secret is missing.")
@@ -212,7 +224,7 @@ def notify(title, message, click):
     req = urllib.request.Request(
         f"https://ntfy.sh/{topic}",
         data=message.encode("utf-8"),
-        headers={"Title": title, "Priority": "high", "Click": click},
+        headers={"Title": title, "Priority": "high", "Click": click, "Tags": tags},
     )
     urllib.request.urlopen(req, timeout=20).read()
 
@@ -298,22 +310,19 @@ def run_all(page, today=None):
     new = {k: v for k, v in current.items() if k not in old}
     print("Matching windows now:", len(current), "| new:", len(new))
 
-    title = "Padel court free"
     show = current if first_run else new
     if first_run or new:
         lines = describe(show)
-        extra = len(lines) - MAX_LINES
-        lines = lines[:MAX_LINES] + ([f"... and {extra} more"] if extra > 0 else [])
         if first_run:
             if lines:
-                msg = "Watcher started. Free right now:\n" + "\n".join(lines)
+                msg = "Free right now:\n" + "\n".join(lines)
             else:
-                msg = ("Watcher started. No matching 2h window is free right now. "
+                msg = ("No matching 2h window is free right now. "
                        "You will get a message when one opens.")
         else:
-            msg = "New free 2h window:\n" + "\n".join(lines)
+            msg = "\n".join(lines)
         first_loc = sorted(show)[0][0] if show else LOCATIONS[0][0]
-        notify(title, msg, f"{BASE}?c={first_loc}")
+        notify(make_title(show, first_run), msg, f"{BASE}?c={first_loc}")
 
     save_state(current)
 
