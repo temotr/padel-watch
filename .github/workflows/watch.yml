@@ -52,3 +52,21 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           curl -s -H "Title: $TITLE" -H "Tags: calendar" -H "Priority: high" -H "Click: https://sunsetpadel.at/events" -d "$SUMMARY" "https://ntfy.sh/$NTFY_TOPIC"
+
+      - name: Telegram alert
+        if: ${{ always() && steps.check.outputs.changed == 'true' }}
+        env:
+          TITLE: ${{ steps.check.outputs.title }}
+          SUMMARY: ${{ steps.check.outputs.summary }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram is not configured, skipping."
+            exit 0
+          fi
+          curl -s -o /dev/null -w "Telegram HTTP %{http_code}\n" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=📅 ${TITLE}"$'\n\n'"${SUMMARY}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode 'reply_markup={"inline_keyboard":[[{"text":"Open events page","url":"https://sunsetpadel.at/events"}]]}'
