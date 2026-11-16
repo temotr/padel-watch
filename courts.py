@@ -209,7 +209,7 @@ def loc_label(loc):
     return f"{num} {names.get(loc, loc)}"
 
 
-def describe(items):
+def describe(items, prefix=""):
     """items: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
 
     📅 Tuesday 17-11-2026
@@ -227,29 +227,10 @@ def describe(items):
             if lines:
                 lines.append("")
             lines.append(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}")
-        lines.append(f"{loc_label(loc)} · {items[(loc, date, hhmm)]}")
+        lines.append(f"{prefix}{loc_label(loc)} · {items[(loc, date, hhmm)]}")
     if extra:
         lines.append("")
         lines.append(f"... and {extra} more")
-    return lines
-
-
-def describe_still(items):
-    """Compact lines for windows that were free before and still are."""
-    order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
-    grouped = {}
-    for loc, date, hhmm in items:
-        grouped.setdefault((date, loc), []).append(hhmm)
-    lines = []
-    for (date, loc) in sorted(grouped, key=lambda k: (k[0], order.get(k[1], 99))):
-        times = sorted(grouped[(date, loc)])
-        d = dt.date.fromisoformat(date)
-        n = len(times)
-        span = times[0] if n == 1 else f"{times[0]}-{times[-1]}"
-        lines.append(
-            f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d-%m} · {loc_label(loc)} · "
-            f"{n} {'window' if n == 1 else 'windows'}, start {span}"
-        )
     return lines
 
 
@@ -264,7 +245,7 @@ def conditions_text():
 
 
 def header_lines(now):
-    return [f"🕒 Checking time of the code: {now:%d.%m.%Y %H:%M}",
+    return [f"🕒 Execution time of the agent: {now:%d.%m.%Y %H:%M}",
             f"📋 Conditions for booking: {conditions_text()}"]
 
 
@@ -420,12 +401,12 @@ def run_all(page, today=None, now=None):
         if first_run:
             body = describe(show) or ["No matching 2h window is free right now.",
                                       "You will get a message when one opens."]
-            sections.append("\n".join(["🟢 FREE RIGHT NOW (first check)", ""] + body))
+            sections.append("\n".join(["🟢 FREE RIGHT NOW (first run)", ""] + body))
         else:
-            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST CHECK", ""] + describe(show)))
+            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(show, "🆕 ")))
             still = {k: v for k, v in current.items() if k not in new}
             if still:
-                sections.append("\n".join(["♻️ STILL FREE (reported before)"] + describe_still(still)))
+                sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
         sections.append("\n".join(coverage_footer(report, now)))
         first_loc = sorted(show)[0][0] if show else LOCATIONS[0][0]
         notify(make_title(show, first_run), "\n\n".join(sections), f"{BASE}?c={first_loc}")
