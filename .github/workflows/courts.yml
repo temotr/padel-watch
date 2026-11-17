@@ -3,7 +3,12 @@ name: Watch courts
 on:
   schedule:
     - cron: "17,47 * * * *"   # backup schedule, every 30 minutes
-  workflow_dispatch:         # lets cron-job.org and you start it
+  workflow_dispatch:         # lets cron-job.org, Telegram and you start it
+    inputs:
+      report:
+        description: "true = always send the full list of free windows"
+        required: false
+        default: "false"
 
 concurrency:
   group: courts
@@ -32,6 +37,7 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_REPORT: ${{ inputs.report }}
         run: python courts.py
 
       - name: Save snapshot
