@@ -431,10 +431,20 @@ def run_all(page, today=None, now=None):
     new = {k: v for k, v in current.items() if k not in old}
     print("Matching windows now:", len(current), "| new:", len(new))
 
+    forced = os.environ.get("FORCE_REPORT", "").strip().lower() == "true"
     show = current if first_run else new
-    if first_run or new:
+    if first_run or new or forced:
         sections = ["\n".join(header_lines(now))]
-        if first_run:
+        if forced and not first_run:
+            # On request (Telegram "padeldome check"): always answer with everything free now.
+            if new:
+                sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(new, "🆕 ")))
+            still = {k: v for k, v in current.items() if k not in new}
+            if still:
+                sections.append("\n".join(["🟢 FREE RIGHT NOW (already reported before)", ""] + describe(still)))
+            if not current:
+                sections.append("No matching 2h window is free right now.")
+        elif first_run:
             body = describe(show) or ["No matching 2h window is free right now.",
                                       "You will get a message when one opens."]
             sections.append("\n".join(["🟢 FREE RIGHT NOW (first run)", ""] + body))
@@ -444,8 +454,10 @@ def run_all(page, today=None, now=None):
             if still:
                 sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
         sections.append("\n".join(coverage_footer(report, now)))
-        first_loc = sorted(show)[0][0] if show else LOCATIONS[0][0]
-        notify(make_title(show, first_run), "\n\n".join(sections), f"{BASE}?c={first_loc}")
+        pick = show or current
+        first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
+        title = "Padeldome check (on request)" if forced and not first_run else make_title(show, first_run)
+        notify(title, "\n\n".join(sections), f"{BASE}?c={first_loc}")
 
     save_state(current)
 
