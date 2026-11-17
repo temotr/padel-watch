@@ -42,7 +42,8 @@ POSTCODES = {  # shown in brackets after the location name (Vienna postcode = di
     "3216": "1210",   # Padeldome Alte Donau, Arbeiterstrandbadstraße 87A
     "2668": "1230",   # Padeldome Alterlaa, Anton-Baumgartner-Straße 40
 }
-URGENT_DAYS = 2                 # urgent mode: today and tomorrow
+URGENT_DAYS = 3                 # urgent mode: today and the next 2 days, any weekday
+URGENT_FIRST, URGENT_LAST = "07:00", "21:30"   # urgent mode: every half-hour start in between
 SNAP = pathlib.Path("courts_state.txt")
 URGENT_SNAP = pathlib.Path("urgent_state.txt")
 URGENT_FLAG = pathlib.Path("urgent.txt")   # "on <time>" while urgent mode is switched on
@@ -54,6 +55,22 @@ STATE_HEADER = "# v3"
 
 def urgent_mode():
     return os.environ.get("MODE", "").strip().lower() == "urgent"
+
+
+def active_weekdays():
+    return set(range(7)) if urgent_mode() else WEEKDAYS
+
+
+def active_starts():
+    """Start times to look for: your evening rules, or every half hour in urgent mode."""
+    if not urgent_mode():
+        return START_TIMES
+    out, t = [], int(URGENT_FIRST[:2]) * 60 + int(URGENT_FIRST[3:])
+    last = int(URGENT_LAST[:2]) * 60 + int(URGENT_LAST[3:])
+    while t <= last:
+        out.append(f"{t // 60:02d}:{t % 60:02d}")
+        t += 30
+    return out
 
 
 def urgent_is_on():
@@ -177,7 +194,7 @@ def find_windows(free, names, targets):
 
     out = {}
     for date, courts_ in by_date.items():
-        for hhmm in START_TIMES:
+        for hhmm in active_starts():
             h, m = map(int, hhmm.split(":"))
             s = int(dt.datetime.combine(date, dt.time(h, m), TZ).timestamp())
             e = s + DURATION_MIN * 60
@@ -317,12 +334,58 @@ def compress_day(rows):
     return sorted(out)
 
 
+PARTS = [("🌅 Morning", 0, 12 * 60), ("☀️ Afternoon", 12 * 60, 17 * 60), ("🌙 Evening", 17 * 60, 24 * 60)]
+
+
+def short_label(loc):
+    """'3️⃣ Süßenbrunn (1220)' (without the word Padeldome)."""
+    return loc_label(loc).replace("Padeldome ", "")
+
+
+def describe_by_part(items, prefix=""):
+    """Urgent mode: per day, morning / afternoon / evening, one line per location."""
+    order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
+    grouped = {}
+    for (loc, date, hhmm), text in items.items():
+        if not is_far(loc):
+            grouped.setdefault((date, loc), []).append((hhmm, text))
+    days = {}
+    for (date, loc), rows in grouped.items():
+        for start, text in compress_day(rows):
+            part = next(p for p, a, b in PARTS if a <= minutes(start) < b)
+            days.setdefault(date, {}).setdefault(part, {}).setdefault(loc, []).append(
+                text.replace(" · ", " ", 1))
+    lines, count, extra = [], 0, 0
+    for date in sorted(days):
+        d = dt.date.fromisoformat(date)
+        if lines:
+            lines.append("")
+        lines.append(bold(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
+        for part, _, _ in PARTS:
+            by_loc = days[date].get(part)
+            if not by_loc:
+                continue
+            lines.append(part)
+            for loc in sorted(by_loc, key=lambda l: order.get(l, 99)):
+                if count >= MAX_WINDOWS:
+                    extra += 1
+                    continue
+                lines.append(f"{prefix}{short_label(loc)}: " + " · ".join(by_loc[loc]))
+                count += 1
+    if extra:
+        lines.append("")
+        lines.append(f"... and {extra} more")
+    return lines
+
+
 def describe(items, prefix=""):
     """Main locations: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
 
-    📅 Tuesday 17-11-2026  (the date line is bold in Telegram)
+    Tuesday 17-11-2026  (the date line is bold in Telegram)
     2️⃣ Padeldome Erdberg · Platz 2 · 18:00-20:00
     """
+    if urgent_mode():
+        return describe_by_part(items, prefix)
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
     grouped = {}
     for (loc, date, hhmm), text in items.items():
@@ -340,7 +403,7 @@ def describe(items, prefix=""):
                 d = dt.date.fromisoformat(date)
                 if lines:
                     lines.append("")
-                lines.append(bold(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
+                lines.append(bold(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
             lines.append(f"{prefix}{loc_label(loc)} · {text}")
             count += 1
     if extra:
@@ -378,6 +441,8 @@ def describe_far(items, new=()):
 
 
 def conditions_text():
+    if urgent_mode():
+        return f"any day · {DURATION_MIN / 60:g}h window · any start time"
     days = sorted(WEEKDAYS)
     names = [WEEKDAY_NAMES[i][:3] for i in days]
     contiguous = days == list(range(days[0], days[-1] + 1))
@@ -539,7 +604,7 @@ def run_all(page, today=None, now=None):
     targets = [
         today + dt.timedelta(days=i)
         for i in range(days)
-        if (today + dt.timedelta(days=i)).weekday() in WEEKDAYS
+        if (today + dt.timedelta(days=i)).weekday() in active_weekdays()
     ]
     first_run, old = load_state()
     if urgent and not targets:
@@ -547,8 +612,7 @@ def run_all(page, today=None, now=None):
         if first_run:
             notify(make_title({}, True),
                    "\n\n".join(["\n".join(header_lines(now)),
-                                 "Today and tomorrow are not Mon-Thu, so there is nothing to check "
-                                 "under your rules. Urgent mode stays on until you send: stop"]),
+                                 "Nothing to check. Urgent mode stays on until you send: stop"]),
                    f"{BASE}?c={LOCATIONS[0][0]}")
         save_state({})
         return
@@ -638,7 +702,7 @@ def run_all(page, today=None, now=None):
     if first_run or near_new or forced:
         sections = ["\n".join(header_lines(now))]
         if urgent and not first_run:
-            sections.append("🚨 URGENT MODE: checking today and tomorrow until you send: stop")
+            sections.append("🚨 URGENT MODE: checking the next 3 days (any time) until you send: stop")
         if forced and not first_run:
             # On request (Telegram "padeldome check"): always answer with everything free now.
             if near_new:
