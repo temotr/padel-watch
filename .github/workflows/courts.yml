@@ -1,14 +1,14 @@
 name: Watch courts
 
+# Runs only on request: started by the Telegram listener ("padeldome check",
+# "padeldome urgent") or by you with "Run workflow". No automatic schedule.
 on:
-  schedule:
-    - cron: "17,47 * * * *"   # backup schedule, every 30 minutes
-  workflow_dispatch:         # lets cron-job.org, Telegram and you start it
+  workflow_dispatch:
     inputs:
-      report:
-        description: "true = always send the full list of free windows"
+      mode:
+        description: "report = full list now, urgent = today + tomorrow watch"
         required: false
-        default: "false"
+        default: "report"
 
 concurrency:
   group: courts
@@ -37,14 +37,16 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FORCE_REPORT: ${{ inputs.report }}
+          MODE: ${{ inputs.mode }}
         run: python courts.py
 
       - name: Save snapshot
         run: |
           git config user.name "watcher"
           git config user.email "watcher@users.noreply.github.com"
-          git add courts_state.txt
+          for f in courts_state.txt urgent_state.txt; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if ! git diff --cached --quiet; then
             git commit -m "Update court snapshot"
             for i in 1 2 3; do
