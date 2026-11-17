@@ -1,0 +1,25 @@
+name: Telegram listener
+
+on:
+  workflow_dispatch:         # started every minute by cron-job.org
+
+concurrency:
+  group: tg-listener
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Telegram for new messages
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tg_listen.py
