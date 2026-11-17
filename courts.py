@@ -26,15 +26,30 @@ LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
     ("3216", "Padeldome Alte Donau"),
 ]
 DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
+BOOK_AHEAD_DAYS = 14            # the club allows booking only 14 days before the start
 WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
 START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
 DURATION_MIN = 120              # a court must be free for this long
 MAX_WINDOWS = 25                # max windows listed in one notification
+URGENT_DAYS = 2                 # urgent mode: today and tomorrow
 SNAP = pathlib.Path("courts_state.txt")
+URGENT_SNAP = pathlib.Path("urgent_state.txt")
+URGENT_FLAG = pathlib.Path("urgent.txt")   # "on <time>" while urgent mode is switched on
 # --------------------------------------------------------------------------
 
 TZ = ZoneInfo("Europe/Vienna")
 STATE_HEADER = "# v3"
+
+
+def urgent_mode():
+    return os.environ.get("MODE", "").strip().lower() == "urgent"
+
+
+def urgent_is_on():
+    try:
+        return URGENT_FLAG.read_text(encoding="utf-8").strip().lower().startswith("on")
+    except OSError:
+        return False
 
 JS = """
 () => {
@@ -274,6 +289,10 @@ def coverage_footer(report, now):
 
 
 def make_title(show, first_run):
+    if urgent_mode():
+        if first_run:
+            return "Urgent watch started"
+        return "URGENT: free padel court" if len(show) == 1 else f"URGENT: {len(show)} free padel windows"
     if first_run:
         return "Court watcher started"
     return "Free padel court" if len(show) == 1 else f"{len(show)} free padel windows"
@@ -333,11 +352,16 @@ def fetch_day(page, url):
     return page.evaluate(JS)
 
 
+def snap_path():
+    return URGENT_SNAP if urgent_mode() else SNAP
+
+
 def load_state():
     """Returns (first_run, {(loc, date, hhmm): text})."""
-    if not SNAP.exists():
+    path = snap_path()
+    if not path.exists():
         return True, {}
-    lines = SNAP.read_text(encoding="utf-8").splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     if not lines or lines[0].strip() != STATE_HEADER:
         return True, {}  # old format from an earlier version: start fresh
     old = {}
@@ -352,18 +376,41 @@ def save_state(current):
     out = [STATE_HEADER]
     for (loc, date, hhmm), text in sorted(current.items()):
         out.append(f"{loc}|{date}|{hhmm}|{text}")
-    SNAP.write_text("\n".join(out) + "\n", encoding="utf-8")
+    snap_path().write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def bookable(date_iso, hhmm, now):
+    """True when a window starting at date/hhmm can already be booked (<= 14 days ahead)."""
+    h, m = map(int, hhmm.split(":"))
+    start = dt.datetime.combine(dt.date.fromisoformat(date_iso), dt.time(h, m), TZ)
+    return start <= now + dt.timedelta(days=BOOK_AHEAD_DAYS)
 
 
 def run_all(page, today=None, now=None):
     now = now or dt.datetime.now(TZ)
     today = today or now.date()
+    urgent = urgent_mode()
+    if urgent:
+        if not urgent_is_on():
+            print("Urgent mode is switched off. Nothing to do.")
+            return
+    days = URGENT_DAYS if urgent else DAYS_AHEAD
     targets = [
         today + dt.timedelta(days=i)
-        for i in range(DAYS_AHEAD)
+        for i in range(days)
         if (today + dt.timedelta(days=i)).weekday() in WEEKDAYS
     ]
     first_run, old = load_state()
+    if urgent and not targets:
+        print("Urgent mode: the next days are not Mon-Thu, nothing to check.")
+        if first_run:
+            notify(make_title({}, True),
+                   "\n\n".join(["\n".join(header_lines(now)),
+                                 "Today and tomorrow are not Mon-Thu, so there is nothing to check "
+                                 "under your rules. Urgent mode stays on until you send: stop"]),
+                   f"{BASE}?c={LOCATIONS[0][0]}")
+        save_state({})
+        return
     current = {}
     report = {}
     ok_locations = 0
@@ -408,6 +455,12 @@ def run_all(page, today=None, now=None):
         windows = find_windows(free, names, set(targets))
         per_day = {}
         for (date_iso, hhmm), text in windows.items():
+            if not bookable(date_iso, hhmm, now):
+                continue  # free, but the club does not allow booking it yet
+            if urgent:
+                h, m = map(int, hhmm.split(":"))
+                if dt.datetime.combine(dt.date.fromisoformat(date_iso), dt.time(h, m), TZ) <= now:
+                    continue  # already started
             current[(loc, date_iso, hhmm)] = text
             per_day[date_iso] = per_day.get(date_iso, 0) + 1
         rows = []
@@ -416,6 +469,9 @@ def run_all(page, today=None, now=None):
             # A day counts as "read" when evening slots (free or booked) were found.
             # Today is exempt: its evening slots may already be in the past.
             ok = d in seen_dates and (s[3] > 0 or d == today)
+            # Not bookable yet (more than 14 days ahead) counts as "not checkable".
+            if not bookable(d.isoformat(), START_TIMES[-1], now):
+                ok = False
             rows.append((d, s[0], per_day.get(d.isoformat(), 0), ok))
         report[loc] = rows
         # Days we could not load keep their old state (no false "new" alerts).
@@ -431,7 +487,8 @@ def run_all(page, today=None, now=None):
     new = {k: v for k, v in current.items() if k not in old}
     print("Matching windows now:", len(current), "| new:", len(new))
 
-    forced = os.environ.get("FORCE_REPORT", "").strip().lower() == "true"
+    forced = (os.environ.get("FORCE_REPORT", "").strip().lower() == "true"
+              or os.environ.get("MODE", "").strip().lower() == "report")
     show = current if first_run else new
     if first_run or new or forced:
         sections = ["\n".join(header_lines(now))]
@@ -457,6 +514,8 @@ def run_all(page, today=None, now=None):
         pick = show or current
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
         title = "Padeldome check (on request)" if forced and not first_run else make_title(show, first_run)
+        if urgent and not first_run:
+            sections[1:1] = ["🚨 URGENT MODE: checking today and tomorrow until you send: stop"]
         notify(title, "\n\n".join(sections), f"{BASE}?c={first_loc}")
 
     save_state(current)
