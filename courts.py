@@ -26,9 +26,16 @@ LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
     ("2667", "Padeldome Süßenbrunn"),
     ("3216", "Padeldome Alte Donau"),
 ]
-FAR_LOCATIONS = [  # farther away: shown compactly at the end, never trigger an alert alone
+FAR_LOCATIONS = [  # alternative locations: shown at the end, never start an alert on their own
     ("2668", "Padeldome Alterlaa"),
+    ("3660", "Racketworld"),
+    ("4797", "Europahalle"),
 ]
+# Locations on another website: (reservation page, name of the date parameter in the link)
+OTHER_SITES = {
+    "3660": ("https://www.racketworld.wien/reservierung", "t"),
+    "4797": ("https://reservierung.europahalle.at/reservierung", "d"),
+}
 DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
 BOOK_AHEAD_DAYS = 14            # the club allows booking only 14 days before the start
 WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
@@ -41,6 +48,8 @@ POSTCODES = {  # shown in brackets after the location name (Vienna postcode = di
     "2667": "1220",   # Padeldome Süßenbrunn, Weingartenallee 22
     "3216": "1210",   # Padeldome Alte Donau, Arbeiterstrandbadstraße 87A
     "2668": "1230",   # Padeldome Alterlaa, Anton-Baumgartner-Straße 40
+    "3660": "1160",   # Racketworld (Ottakring, 16th district)
+    "4797": "1230",   # Europahalle, An den Steinfeldern 2A
 }
 URGENT_DAYS = 3                 # urgent mode: today and the next 2 days, any weekday
 URGENT_FIRST, URGENT_LAST = "07:00", "21:30"   # urgent mode: every half-hour start in between
@@ -51,6 +60,17 @@ URGENT_FLAG = pathlib.Path("urgent.txt")   # "on <time>" while urgent mode is sw
 
 TZ = ZoneInfo("Europe/Vienna")
 STATE_HEADER = "# v3"
+
+
+def page_url(loc, ts):
+    """Link to one day of a location (the day is given as the timestamp of 08:00 Vienna time)."""
+    base, param = OTHER_SITES.get(loc, (BASE, "d"))
+    return f"{base}?c={loc}&{param}={ts}"
+
+
+def click_url(loc):
+    base, _ = OTHER_SITES.get(loc, (BASE, "d"))
+    return f"{base}?c={loc}"
 
 
 def urgent_mode():
@@ -257,18 +277,29 @@ NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7�
 
 
 BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
+UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
+ALT_HEADER = "➕ ALTERNATIVE LOCATIONS FREE (farther away)"
 
 
 def bold(text):
     return f"{BOLD_ON}{text}{BOLD_OFF}"
 
 
+def underline(text):
+    return f"{UL_ON}{text}{UL_OFF}"
+
+
 def plain(text):
-    return text.replace(BOLD_ON, "").replace(BOLD_OFF, "")
+    for m in (BOLD_ON, BOLD_OFF, UL_ON, UL_OFF):
+        text = text.replace(m, "")
+    return text
 
 
 def telegram_html(text):
-    return html.escape(text, quote=False).replace(BOLD_ON, "<b>").replace(BOLD_OFF, "</b>")
+    out = html.escape(text, quote=False)
+    for mark, tag in ((BOLD_ON, "<b>"), (BOLD_OFF, "</b>"), (UL_ON, "<u>"), (UL_OFF, "</u>")):
+        out = out.replace(mark, tag)
+    return out
 
 
 def is_far(loc):
@@ -724,7 +755,7 @@ def run_all(page, today=None, now=None):
             notify(make_title({}, True),
                    "\n\n".join(["\n".join(header_lines(now)),
                                  "Nothing to check. Urgent mode stays on until you send: stop"]),
-                   f"{BASE}?c={LOCATIONS[0][0]}")
+                   click_url(LOCATIONS[0][0]))
         save_state({})
         return
     current = {}
@@ -741,7 +772,7 @@ def run_all(page, today=None, now=None):
                 continue
             ts = int(dt.datetime.combine(target, dt.time(8, 0), TZ).timestamp())
             try:
-                data = fetch_day(page, f"{BASE}?c={loc}&d={ts}")
+                data = fetch_day(page, page_url(loc, ts))
             except Exception as exc:  # noqa: BLE001
                 print(f"WARNING: {loc_name}: could not read {target}: {exc}")
                 continue
@@ -817,10 +848,10 @@ def run_all(page, today=None, now=None):
             sections.append("\n".join(describe_urgent(near_cur, () if first_run else near_new, report)))
             if far_cur:
                 far = describe_far(far_cur, () if first_run else new)
-                sections.append("\n".join("➕ " + l.replace("Padeldome ", "") for l in far))
+                sections.append("\n".join([bold(underline(ALT_HEADER))] + [l.replace("Padeldome ", "") for l in far]))
             sections.append(checked_line_urgent(report) + '\nSend "stop" to end urgent mode.')
             title = make_title(show, first_run)
-            notify(title, "\n\n".join(sections), f"{BASE}?c={(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0])}")
+            notify(title, "\n\n".join(sections), click_url(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0]))
             save_state(current)
             return
         if forced and not first_run:
@@ -842,12 +873,12 @@ def run_all(page, today=None, now=None):
             if still:
                 sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
         if far_cur:
-            sections.append("\n".join(["➕ FARTHER LOCATIONS (just in case)", ""] + describe_far(far_cur, () if first_run else new)))
+            sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + describe_far(far_cur, () if first_run else new)))
         sections.append("\n".join(coverage_footer(report, now)))
         pick = show or near_cur
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
         title = "Padeldome check (on request)" if forced and not first_run else make_title(show, first_run)
-        notify(title, "\n\n".join(sections), f"{BASE}?c={first_loc}")
+        notify(title, "\n\n".join(sections), click_url(first_loc))
 
     save_state(current)
 
