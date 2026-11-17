@@ -30,11 +30,13 @@ FAR_LOCATIONS = [  # alternative locations: shown at the end, never start an ale
     ("2668", "Padeldome Alterlaa"),
     ("3660", "Racketworld"),
     ("4797", "Europahalle"),
+    ("4858", "Playpadel Gänserndorf"),
 ]
 # Locations on another website: (reservation page, name of the date parameter in the link)
 OTHER_SITES = {
     "3660": ("https://www.racketworld.wien/reservierung", "t"),
     "4797": ("https://reservierung.europahalle.at/reservierung", "d"),
+    "4858": ("https://playpadel.tennisplatz.info/reservierung", ("d", "t")),  # both, to be safe
 }
 DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
 BOOK_AHEAD_DAYS = 14            # the club allows booking only 14 days before the start
@@ -50,6 +52,7 @@ POSTCODES = {  # shown in brackets after the location name (Vienna postcode = di
     "2668": "1230",   # Padeldome Alterlaa, Anton-Baumgartner-Straße 40
     "3660": "1160",   # Racketworld (Ottakring, 16th district)
     "4797": "1230",   # Europahalle, An den Steinfeldern 2A
+    "4858": "2230",   # Playpadel Gänserndorf (Lower Austria, outside Vienna)
 }
 URGENT_DAYS = 3                 # urgent mode: today and the next 2 days, any weekday
 URGENT_FIRST, URGENT_LAST = "07:00", "21:30"   # urgent mode: every half-hour start in between
@@ -64,8 +67,9 @@ STATE_HEADER = "# v3"
 
 def page_url(loc, ts):
     """Link to one day of a location (the day is given as the timestamp of 08:00 Vienna time)."""
-    base, param = OTHER_SITES.get(loc, (BASE, "d"))
-    return f"{base}?c={loc}&{param}={ts}"
+    base, params = OTHER_SITES.get(loc, (BASE, "d"))
+    params = (params,) if isinstance(params, str) else params
+    return f"{base}?c={loc}" + "".join(f"&{p}={ts}" for p in params)
 
 
 def click_url(loc):
@@ -316,12 +320,11 @@ def loc_name(loc):
 
 def loc_label(loc):
     """'3️⃣ Padeldome Süßenbrunn (1220)' - the number is the position in LOCATIONS."""
-    names = dict(LOCATIONS)
-    if loc in names:
-        idx = [l for l, _ in LOCATIONS].index(loc)
-        num = NUMBERS[idx] if idx < len(NUMBERS) else "•"
-        return f"{num} {loc_name(loc)}"
-    return f"➕ {loc_name(loc)}"
+    ids = [l for l, _ in LOCATIONS + FAR_LOCATIONS]
+    if loc in ids:
+        idx = ids.index(loc)
+        return f"{NUMBERS[idx] if idx < len(NUMBERS) else '•'} {loc_name(loc)}"
+    return f"• {loc_name(loc)}"
 
 
 def minutes(hhmm):
@@ -567,7 +570,7 @@ def describe_far(items, new=(), report=None):
     lines, nothing = [], []
     for loc, _ in FAR_LOCATIONS:
         days = by_loc.get(loc)
-        name = loc_name(loc).replace("Padeldome ", "")
+        name = short_label(loc)
         if not days:
             continue
         ranges, all_new = {}, bool(new_set)
@@ -644,7 +647,7 @@ def coverage_footer(report, now):
         if rows is None:
             continue
         free, bad = status(rows)
-        short = name.replace("Padeldome ", "")
+        short = short_label(loc)
         mark = ""
         if bad:
             lines.append(f"⚠️ {mark}{short} · not read: " + ", ".join(bad))
