@@ -334,7 +334,7 @@ def compress_day(rows):
     return sorted(out)
 
 
-PARTS = [("🌅 Morning", 0, 12 * 60), ("☀️ Afternoon", 12 * 60, 17 * 60), ("🌙 Evening", 17 * 60, 24 * 60)]
+EVENING_FROM = 17 * 60
 
 
 def short_label(loc):
@@ -342,40 +342,148 @@ def short_label(loc):
     return loc_label(loc).replace("Padeldome ", "")
 
 
-def describe_by_part(items, prefix=""):
-    """Urgent mode: per day, morning / afternoon / evening, one line per location."""
+def court_count(courts):
+    """'Platz 8 / 5 / 6 / 7 / +2 more' -> 6"""
+    n = 0
+    for part in courts.split(" / "):
+        m = re.match(r"\+(\d+)", part)
+        n += int(m.group(1)) if m else 1
+    return n
+
+
+def block_info(first, line):
+    """Reads one compressed line back into numbers (start, end, courts, text)."""
+    times = re.findall(r"\d\d:\d\d", line)
+    if " + " in line or " · " not in line:       # chain over several courts
+        return {"start": times[0] if times else first, "end": times[-1] if times else first,
+                "courts": None, "n": 1, "text": line}
+    courts, _, rng = line.rpartition(" · ")
+    a, b = re.match(r"(\d\d:\d\d)-(\d\d:\d\d)", rng).groups()
+    return {"start": a, "end": b, "courts": courts, "n": court_count(courts), "text": line}
+
+
+def hours_of(b):
+    return (minutes(b["end"]) - minutes(b["start"])) / 60
+
+
+def suggestion(b):
+    """What to book: the first court of the block, e.g. 'Platz 8 12:30-15:30 (3h)'."""
+    if b["courts"] is None:
+        return b["text"]
+    return f"{b['courts'].split(' / ')[0]} {b['start']}-{b['end']} ({hours_of(b):g}h)"
+
+
+def describe_summary(items, prefix=""):
+    """Urgent mode: per day and location ONE line with all free time ranges plus a booking tip.
+
+    Wednesday 18-11-2026
+    3️⃣ Süßenbrunn (1220) · 08:00-17:30 · up to 4 courts
+       💡 Platz 8 11:30-17:30 (6h)
+       🌙 Platz 7 18:30-21:30 (3h)
+    """
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
     grouped = {}
     for (loc, date, hhmm), text in items.items():
         if not is_far(loc):
             grouped.setdefault((date, loc), []).append((hhmm, text))
-    days = {}
-    for (date, loc), rows in grouped.items():
-        for start, text in compress_day(rows):
-            part = next(p for p, a, b in PARTS if a <= minutes(start) < b)
-            days.setdefault(date, {}).setdefault(part, {}).setdefault(loc, []).append(
-                text.replace(" · ", " ", 1))
-    lines, count, extra = [], 0, 0
-    for date in sorted(days):
-        d = dt.date.fromisoformat(date)
-        if lines:
-            lines.append("")
-        lines.append(bold(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
-        for part, _, _ in PARTS:
-            by_loc = days[date].get(part)
-            if not by_loc:
-                continue
-            lines.append(part)
-            for loc in sorted(by_loc, key=lambda l: order.get(l, 99)):
-                if count >= MAX_WINDOWS:
-                    extra += 1
-                    continue
-                lines.append(f"{prefix}{short_label(loc)}: " + " · ".join(by_loc[loc]))
-                count += 1
+    lines, current_day, count, extra = [], None, 0, 0
+    for (date, loc) in sorted(grouped, key=lambda k: (k[0], order.get(k[1], 99))):
+        if count >= MAX_WINDOWS:
+            extra += 1
+            continue
+        blocks = [block_info(f, t) for f, t in compress_day(grouped[(date, loc)])]
+        spans = []
+        for st, en in sorted((minutes(b["start"]), minutes(b["end"])) for b in blocks):
+            if spans and st <= spans[-1][1]:
+                spans[-1][1] = max(spans[-1][1], en)
+            else:
+                spans.append([st, en])
+        span_txt = " · ".join(f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}" for a, b in spans)
+        peak = max(b["n"] for b in blocks)
+        if date != current_day:
+            current_day = date
+            d = dt.date.fromisoformat(date)
+            if lines:
+                lines.append("")
+            lines.append(bold(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
+        head = f"{prefix}{short_label(loc)} · {span_txt}"
+        if peak > 1:
+            head += f" · up to {peak} courts"
+        lines.append(head)
+        best = max(blocks, key=lambda b: (hours_of(b), b["courts"] is not None, -minutes(b["start"])))
+        lines.append(f"   💡 {suggestion(best)}")
+        evening = [b for b in blocks if minutes(b["start"]) >= EVENING_FROM]
+        if evening:
+            best_ev = max(evening, key=lambda b: (hours_of(b), b["courts"] is not None, -minutes(b["start"])))
+            if best_ev is not best:
+                lines.append(f"   🌙 {suggestion(best_ev)}")
+        count += 1
     if extra:
         lines.append("")
         lines.append(f"... and {extra} more")
     return lines
+
+
+def describe_urgent(near_cur, new_keys, report):
+    """Urgent mode body: one block per location, one line per day with the bookable ranges.
+
+    3️⃣ Süßenbrunn (1220)
+    Wed 18.11: 08:00-17:30 · 🆕 18:30-21:30 · up to 4 courts
+    """
+    days = sorted({d for rows in report.values() for d, *_ in rows})
+    grouped = {}
+    for (loc, date, hhmm), text in near_cur.items():
+        grouped.setdefault((loc, date), []).append((hhmm, text))
+    new_by = {}
+    for (loc, date, hhmm) in new_keys:
+        new_by.setdefault((loc, date), []).append(minutes(hhmm))
+    lines = []
+    for loc, _ in LOCATIONS:
+        if report.get(loc) is None:
+            continue
+        day_lines = []
+        for d in days:
+            iso = d.isoformat()
+            rows = grouped.get((loc, iso))
+            label = f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m}"
+            if not rows:
+                day_lines.append(f"{label}: –")
+                continue
+            blocks = [block_info(f, t) for f, t in compress_day(rows)]
+            spans = []
+            for st, en in sorted((minutes(b["start"]), minutes(b["end"])) for b in blocks):
+                if spans and st <= spans[-1][1]:
+                    spans[-1][1] = max(spans[-1][1], en)
+                else:
+                    spans.append([st, en])
+            fresh = new_by.get((loc, iso), [])
+            parts = []
+            for a, b in spans:
+                is_new = any(a <= m < b for m in fresh)
+                parts.append(f"{'🆕 ' if is_new else ''}{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}")
+            text = f"{label}: " + " · ".join(parts)
+            peak = max(b["n"] for b in blocks)
+            if peak > 1:
+                text += f" · up to {peak} courts"
+            day_lines.append(text)
+        if lines:
+            lines.append("")
+        if all(l.endswith(": –") for l in day_lines):
+            lines.append(f"{bold(short_label(loc))}: nothing free")
+        else:
+            lines.append(bold(short_label(loc)))
+            lines.extend(day_lines)
+    return lines
+
+
+def checked_line_urgent(report):
+    days = sorted({d for rows in report.values() for d, *_ in rows})
+    bad = [f"{short_label(loc).split(' ', 1)[1]} {d:%d.%m}"
+           for loc, rows in report.items() for d, slots, n, ok in rows if not ok and not n]
+    span = f"{days[0]:%d.%m}-{days[-1]:%d.%m}" if len(days) > 1 else f"{days[0]:%d.%m}"
+    if bad:
+        return f"🔎 CHECKED: {span} · ⚠️ not read: " + ", ".join(bad)
+    return f"🔎 CHECKED: {span} · all {len(report)} locations ✅"
 
 
 def describe(items, prefix=""):
@@ -385,7 +493,7 @@ def describe(items, prefix=""):
     2️⃣ Padeldome Erdberg · Platz 2 · 18:00-20:00
     """
     if urgent_mode():
-        return describe_by_part(items, prefix)
+        return describe_summary(items, prefix)
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
     grouped = {}
     for (loc, date, hhmm), text in items.items():
@@ -442,7 +550,7 @@ def describe_far(items, new=()):
 
 def conditions_text():
     if urgent_mode():
-        return f"any day · {DURATION_MIN / 60:g}h window · any start time"
+        return f"Next {URGENT_DAYS} days · any day · {DURATION_MIN / 60:g}h block · any time"
     days = sorted(WEEKDAYS)
     names = [WEEKDAY_NAMES[i][:3] for i in days]
     contiguous = days == list(range(days[0], days[-1] + 1))
@@ -525,12 +633,15 @@ def send_telegram(title, message, click):
         f"https://api.telegram.org/bot{token}/sendMessage",
         data=urllib.parse.urlencode(data).encode("utf-8"),
     )
-    try:
-        urllib.request.urlopen(req, timeout=20).read()
-        return True
-    except Exception as exc:  # noqa: BLE001  (never print the URL: it contains the token)
-        print(f"WARNING: Telegram message failed ({type(exc).__name__}).")
-        return False
+    for attempt in range(3):
+        try:
+            urllib.request.urlopen(req, timeout=20).read()
+            return True
+        except Exception as exc:  # noqa: BLE001  (never print the URL: it contains the token)
+            print(f"WARNING: Telegram message failed ({type(exc).__name__}), attempt {attempt + 1}.")
+            if attempt < 2:
+                time.sleep(3)
+    return False
 
 
 def notify(title, message, click, tags="tennis"):
@@ -701,8 +812,17 @@ def run_all(page, today=None, now=None):
     # Farther locations are listed at the end but never start an alert on their own.
     if first_run or near_new or forced:
         sections = ["\n".join(header_lines(now))]
-        if urgent and not first_run:
-            sections.append("🚨 URGENT MODE: checking the next 3 days (any time) until you send: stop")
+        if urgent:
+            # Urgent mode: one summary block per location, new ranges marked with 🆕.
+            sections.append("\n".join(describe_urgent(near_cur, () if first_run else near_new, report)))
+            if far_cur:
+                far = describe_far(far_cur, () if first_run else new)
+                sections.append("\n".join("➕ " + l.replace("Padeldome ", "") for l in far))
+            sections.append(checked_line_urgent(report) + '\nSend "stop" to end urgent mode.')
+            title = make_title(show, first_run)
+            notify(title, "\n\n".join(sections), f"{BASE}?c={(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0])}")
+            save_state(current)
+            return
         if forced and not first_run:
             # On request (Telegram "padeldome check"): always answer with everything free now.
             if near_new:
