@@ -7,6 +7,7 @@ on a single court or on several courts directly after each other
 You get a message only when such a window is NEWLY free.
 """
 import datetime as dt
+import html
 import json
 import os
 import pathlib
@@ -24,6 +25,9 @@ LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
     ("2665", "Padeldome Erdberg"),
     ("2667", "Padeldome Süßenbrunn"),
     ("3216", "Padeldome Alte Donau"),
+]
+FAR_LOCATIONS = [  # farther away: shown compactly at the end, never trigger an alert alone
+    ("2668", "Padeldome Alterlaa"),
 ]
 DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
 BOOK_AHEAD_DAYS = 14            # the club allows booking only 14 days before the start
@@ -218,36 +222,134 @@ def ingest(data, free, names, seen_dates, seen_slots, stats=None, only_date=None
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 
 
+BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
+
+
+def bold(text):
+    return f"{BOLD_ON}{text}{BOLD_OFF}"
+
+
+def plain(text):
+    return text.replace(BOLD_ON, "").replace(BOLD_OFF, "")
+
+
+def telegram_html(text):
+    return html.escape(text, quote=False).replace(BOLD_ON, "<b>").replace(BOLD_OFF, "</b>")
+
+
+def is_far(loc):
+    return loc in {l for l, _ in FAR_LOCATIONS}
+
+
 def loc_label(loc):
     """'3️⃣ Padeldome Süßenbrunn' - the number is the position in LOCATIONS."""
     names = dict(LOCATIONS)
-    idx = [l for l, _ in LOCATIONS].index(loc) if loc in names else None
-    num = NUMBERS[idx] if idx is not None and idx < len(NUMBERS) else "•"
-    return f"{num} {names.get(loc, loc)}"
+    if loc in names:
+        idx = [l for l, _ in LOCATIONS].index(loc)
+        num = NUMBERS[idx] if idx < len(NUMBERS) else "•"
+        return f"{num} {names[loc]}"
+    return f"➕ {dict(FAR_LOCATIONS).get(loc, loc)}"
+
+
+def minutes(hhmm):
+    h, m = map(int, hhmm.split(":"))
+    return h * 60 + m
+
+
+def short_courts(courts):
+    """'Platz 8 / Platz 5 / Platz 6' -> 'Platz 8 / 5 / 6'."""
+    parts = courts.split(" / ")
+    return " / ".join([parts[0]] + [p[6:] if p.startswith("Platz ") else p for p in parts[1:]])
+
+
+def compress_day(rows):
+    """rows: [(start 'HH:MM', text)] of one location and day -> [(sort_key, line_text)].
+
+    Windows with the same courts that follow each other (18:00, 18:30, 19:00 ...) become
+    one line: 'Platz 8 / 5 · 18:00-22:00 (4h free)'. Chains over several courts stay as they are.
+    """
+    out, singles = [], {}
+    for hhmm, text in sorted(rows):
+        if " + " in text or " · " not in text:
+            out.append((hhmm, text))
+            continue
+        courts, _, rng = text.rpartition(" · ")
+        singles.setdefault(courts, []).append((hhmm, rng.partition("-")[2]))
+    for courts, lst in singles.items():
+        runs, run = [], [lst[0]]
+        for item in lst[1:]:
+            if minutes(item[0]) - minutes(run[-1][0]) <= 30:
+                run.append(item)
+            else:
+                runs.append(run)
+                run = [item]
+        runs.append(run)
+        for run in runs:
+            first, last_end = run[0][0], run[-1][1]
+            line = f"{short_courts(courts)} · {first}-{last_end}"
+            if len(run) > 1:
+                line += f" ({(minutes(last_end) - minutes(first)) / 60:g}h free)"
+            out.append((first, line))
+    return sorted(out)
 
 
 def describe(items, prefix=""):
-    """items: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
+    """Main locations: {(loc, date_iso, hhmm): text} -> lines grouped by day, e.g.
 
-    📅 Tuesday 17-11-2026
+    📅 Tuesday 17-11-2026  (the date line is bold in Telegram)
     2️⃣ Padeldome Erdberg · Platz 2 · 18:00-20:00
     """
     order = {loc: i for i, (loc, _) in enumerate(LOCATIONS)}
-    keys = sorted(items, key=lambda k: (k[1], order.get(k[0], 99), k[2]))
-    shown, extra = keys[:MAX_WINDOWS], max(0, len(keys) - MAX_WINDOWS)
-
-    lines, current_day = [], None
-    for loc, date, hhmm in shown:
-        if date != current_day:
-            current_day = date
-            d = dt.date.fromisoformat(date)
-            if lines:
-                lines.append("")
-            lines.append(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}")
-        lines.append(f"{prefix}{loc_label(loc)} · {items[(loc, date, hhmm)]}")
+    grouped = {}
+    for (loc, date, hhmm), text in items.items():
+        if is_far(loc):
+            continue
+        grouped.setdefault((date, loc), []).append((hhmm, text))
+    lines, current_day, count, extra = [], None, 0, 0
+    for (date, loc) in sorted(grouped, key=lambda k: (k[0], order.get(k[1], 99))):
+        for _, text in compress_day(grouped[(date, loc)]):
+            if count >= MAX_WINDOWS:
+                extra += 1
+                continue
+            if date != current_day:
+                current_day = date
+                d = dt.date.fromisoformat(date)
+                if lines:
+                    lines.append("")
+                lines.append(bold(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
+            lines.append(f"{prefix}{loc_label(loc)} · {text}")
+            count += 1
     if extra:
         lines.append("")
         lines.append(f"... and {extra} more")
+    return lines
+
+
+def describe_far(items, new=()):
+    """Farther locations, very short: one line per location with the free time ranges per day."""
+    by_loc = {}
+    for (loc, date, hhmm) in items:
+        if is_far(loc):
+            by_loc.setdefault(loc, {}).setdefault(date, []).append(minutes(hhmm))
+    lines = []
+    for loc, _ in FAR_LOCATIONS:
+        days = by_loc.get(loc)
+        if not days:
+            continue
+        pieces = []
+        for date in sorted(days):
+            spans = []
+            for st in sorted(days[date]):
+                en = st + DURATION_MIN
+                if spans and st <= spans[-1][1]:
+                    spans[-1][1] = max(spans[-1][1], en)
+                else:
+                    spans.append([st, en])
+            d = dt.date.fromisoformat(date)
+            rng = ", ".join(f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}" for a, b in spans)
+            is_new = any(k[0] == loc and k[1] == date for k in new)
+            pieces.append(f"{'🆕 ' if is_new else ''}{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m} {rng}")
+        lines.append(f"{dict(FAR_LOCATIONS)[loc]}: " + " · ".join(pieces))
     return lines
 
 
@@ -285,17 +387,31 @@ def coverage_footer(report, now):
             lines.append("– none fit: " + ", ".join(none))
         if bad:
             lines.append("⚠️ not read / not bookable yet: " + ", ".join(bad))
+    for loc, name in FAR_LOCATIONS:
+        rows = report.get(loc)
+        if rows is None:
+            continue
+        free = [f"{d:%d.%m}" for d, slots, n, ok in rows if n]
+        bad = [f"{d:%d.%m}" for d, slots, n, ok in rows if not ok and not n]
+        bits = ["✅ " + ", ".join(free)] if free else ["none fit"]
+        if bad:
+            bits.append("⚠️ " + ", ".join(bad))
+        if lines and lines[-1] != "" and not any(l.startswith("➕") for l in lines):
+            lines.append("")
+        lines.append(f"➕ {name}: " + " · ".join(bits))
     return lines
 
 
 def make_title(show, first_run):
+    # Count places per day (a 4h block is one option, not five windows).
+    n = len({(k[0], k[1]) for k in show})
     if urgent_mode():
         if first_run:
             return "Urgent watch started"
-        return "URGENT: free padel court" if len(show) == 1 else f"URGENT: {len(show)} free padel windows"
+        return "URGENT: free padel court" if n == 1 else f"URGENT: {n} free padel options"
     if first_run:
         return "Court watcher started"
-    return "Free padel court" if len(show) == 1 else f"{len(show)} free padel windows"
+    return "Free padel court" if n == 1 else f"{n} free padel options"
 
 
 def send_telegram(title, message, click):
@@ -305,11 +421,12 @@ def send_telegram(title, message, click):
     if not token or not chat:
         return False
     text = f"🎾 {title}\n\n{message}"
-    if len(text) > 4000:  # Telegram's limit is 4096 characters
-        text = text[:3990] + "\n…"
+    if len(text) > 3500:  # Telegram's limit is 4096 characters (HTML tags count too)
+        text = plain(text)[:3490].rsplit("\n", 1)[0] + "\n…"
     data = {
         "chat_id": chat,
-        "text": text,
+        "parse_mode": "HTML",
+        "text": telegram_html(text),
         "disable_web_page_preview": "true",
         "reply_markup": json.dumps(
             {"inline_keyboard": [[{"text": "Open booking page", "url": click}]]}
@@ -333,7 +450,7 @@ def notify(title, message, click, tags="tennis"):
     if topic:
         req = urllib.request.Request(
             f"https://ntfy.sh/{topic}",
-            data=message.encode("utf-8"),
+            data=plain(message).encode("utf-8"),
             headers={"Title": title, "Priority": "high", "Click": click, "Tags": tags},
         )
         urllib.request.urlopen(req, timeout=20).read()
@@ -415,7 +532,7 @@ def run_all(page, today=None, now=None):
     report = {}
     ok_locations = 0
 
-    for loc, loc_name in LOCATIONS:
+    for loc, loc_name in LOCATIONS + FAR_LOCATIONS:
         free, names = {}, {}
         seen_dates, seen_slots = set(), set()
         stats = {}
@@ -489,33 +606,39 @@ def run_all(page, today=None, now=None):
 
     forced = (os.environ.get("FORCE_REPORT", "").strip().lower() == "true"
               or os.environ.get("MODE", "").strip().lower() == "report")
-    show = current if first_run else new
-    if first_run or new or forced:
+    near_cur = {k: v for k, v in current.items() if not is_far(k[0])}
+    far_cur = {k: v for k, v in current.items() if is_far(k[0])}
+    near_new = {k: v for k, v in new.items() if not is_far(k[0])}
+    show = near_cur if first_run else near_new
+    # Farther locations are listed at the end but never start an alert on their own.
+    if first_run or near_new or forced:
         sections = ["\n".join(header_lines(now))]
+        if urgent and not first_run:
+            sections.append("🚨 URGENT MODE: checking today and tomorrow until you send: stop")
         if forced and not first_run:
             # On request (Telegram "padeldome check"): always answer with everything free now.
-            if new:
-                sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(new, "🆕 ")))
-            still = {k: v for k, v in current.items() if k not in new}
+            if near_new:
+                sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(near_new, "🆕 ")))
+            still = {k: v for k, v in near_cur.items() if k not in near_new}
             if still:
                 sections.append("\n".join(["🟢 FREE RIGHT NOW (already reported before)", ""] + describe(still)))
-            if not current:
-                sections.append("No matching 2h window is free right now.")
+            if not near_cur:
+                sections.append("No matching 2h window is free right now at the main locations.")
         elif first_run:
-            body = describe(show) or ["No matching 2h window is free right now.",
-                                      "You will get a message when one opens."]
+            body = describe(near_cur) or ["No matching 2h window is free right now.",
+                                          "You will get a message when one opens."]
             sections.append("\n".join(["🟢 FREE RIGHT NOW (first run)", ""] + body))
         else:
-            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(show, "🆕 ")))
-            still = {k: v for k, v in current.items() if k not in new}
+            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(near_new, "🆕 ")))
+            still = {k: v for k, v in near_cur.items() if k not in near_new}
             if still:
                 sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
+        if far_cur:
+            sections.append("\n".join(["➕ FARTHER LOCATIONS (just in case)", ""] + describe_far(far_cur, () if first_run else new)))
         sections.append("\n".join(coverage_footer(report, now)))
-        pick = show or current
+        pick = show or near_cur
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
         title = "Padeldome check (on request)" if forced and not first_run else make_title(show, first_run)
-        if urgent and not first_run:
-            sections[1:1] = ["🚨 URGENT MODE: checking today and tomorrow until you send: stop"]
         notify(title, "\n\n".join(sections), f"{BASE}?c={first_loc}")
 
     save_state(current)
