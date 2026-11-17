@@ -54,6 +54,7 @@ POSTCODES = {  # shown in brackets after the location name (Vienna postcode = di
     "4797": "1230",   # Europahalle, An den Steinfeldern 2A
     "4858": "2230",   # Playpadel Gänserndorf (Lower Austria, outside Vienna)
 }
+MIN_SLOTS_READ = 12             # a day with at least this many slots on the page counts as read
 URGENT_DAYS = 3                 # urgent mode: today and the next 2 days, any weekday
 URGENT_FIRST, URGENT_LAST = "07:00", "21:30"   # urgent mode: every half-hour start in between
 SNAP = pathlib.Path("courts_state.txt")
@@ -282,12 +283,17 @@ NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7�
 
 BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
 UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
-ALT_HEADER = "➕ ALTERNATIVE LOCATIONS FREE (farther away)"
+ALT_HEADER = "OTHER LOCATIONS FREE RIGHT NOW (farther away)"
 NOTHING = "nothing free for set booking conditions"
 
 
 def bold(text):
     return f"{BOLD_ON}{text}{BOLD_OFF}"
+
+
+def heading(text):
+    """Section heading: bold and underlined in Telegram, plain in ntfy."""
+    return f"{BOLD_ON}{UL_ON}{text}{UL_OFF}{BOLD_OFF}"
 
 
 def underline(text):
@@ -511,14 +517,15 @@ def describe_urgent(near_cur, new_keys, report):
     return lines
 
 
-def checked_line_urgent(report):
+def checked_lines_urgent(report):
     days = sorted({d for rows in report.values() for d, *_ in rows})
     bad = [f"{short_label(loc).split(' ', 1)[1]} {d:%d.%m}"
            for loc, rows in report.items() for d, slots, n, ok in rows if not ok and not n]
     span = f"{days[0]:%d.%m}-{days[-1]:%d.%m}" if len(days) > 1 else f"{days[0]:%d.%m}"
+    head = heading(f"CHECKED LOCATIONS {span} · next {URGENT_DAYS} days")
     if bad:
-        return f"🔎 CHECKED: {span} · ⚠️ not read: " + ", ".join(bad)
-    return f"🔎 CHECKED: {span} · all {len(report)} locations ✅"
+        return [head, "", "⚠️ not read: " + ", ".join(bad)]
+    return [head, "", f"✅ all {len(report)} locations read"]
 
 
 def describe(items, prefix=""):
@@ -627,7 +634,7 @@ def coverage_footer(report, now):
     wd = sorted(WEEKDAYS)
     names = [WEEKDAY_NAMES[i][:3] for i in wd]
     day_txt = f"{names[0]}-{names[-1]}" if wd == list(range(wd[0], wd[-1] + 1)) and len(wd) > 1 else ", ".join(names)
-    lines = [f"🔎 CHECKED {days[0]:%d.%m}-{days[-1]:%d.%m} · {day_txt}"]
+    lines = [heading(f"CHECKED LOCATIONS {days[0]:%d.%m}-{days[-1]:%d.%m} · {day_txt} only"), ""]
     later = set()
 
     def status(rows):
@@ -844,9 +851,11 @@ def run_all(page, today=None, now=None):
         rows = []
         for d in targets:
             s = stats.get(d, [0, 0, 0, 0])
-            # A day counts as "read" when evening slots (free or booked) were found.
+            # A day counts as "read" when evening slots (free or booked) were found, or when
+            # the page simply shows a normal number of slots (some venues block their evenings
+            # on certain days). A broken page only carries a handful of slots.
             # Today is exempt: its evening slots may already be in the past.
-            ok = d in seen_dates and (s[3] > 0 or d == today)
+            ok = d in seen_dates and (s[3] > 0 or s[0] >= MIN_SLOTS_READ or d == today)
             # Not bookable yet (more than 14 days ahead) counts as "not checkable".
             if not bookable(d.isoformat(), START_TIMES[-1], now):
                 ok = False
@@ -876,35 +885,33 @@ def run_all(page, today=None, now=None):
         sections = ["\n".join(header_lines(now))]
         if urgent:
             # Urgent mode: one summary block per location, new ranges marked with 🆕.
-            sections.append("\n".join(describe_urgent(near_cur, () if first_run else near_new, report)))
+            sections.append("\n".join([heading("FREE RIGHT NOW"), ""]
+                                      + describe_urgent(near_cur, () if first_run else near_new, report)))
             if far_cur:
                 far = describe_far(far_cur, () if first_run else new, report)
-                sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + far))
-            sections.append(checked_line_urgent(report) + '\nSend "stop" to end urgent mode.')
+                sections.append("\n".join([heading(ALT_HEADER), ""] + far))
+            sections.append("\n".join(checked_lines_urgent(report)) + '\n\nSend "stop" to end urgent mode.')
             title = make_title(show, first_run)
             notify(title, "\n\n".join(sections), click_url(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0]))
             save_state(current)
             return
-        if forced and not first_run:
-            # On request (Telegram "padeldome check"): always answer with everything free now.
-            if near_new:
-                sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(near_new, "🆕 ")))
-            still = {k: v for k, v in near_cur.items() if k not in near_new}
-            if still:
-                sections.append("\n".join(["🟢 FREE RIGHT NOW (already reported before)", ""] + describe(still)))
-            if not near_cur:
-                sections.append("No matching 2h window is free right now at the main locations.")
-        elif first_run:
-            body = describe(near_cur) or ["No matching 2h window is free right now.",
-                                          "You will get a message when one opens."]
-            sections.append("\n".join(["🟢 FREE RIGHT NOW (first run)", ""] + body))
+        main = [heading("FREE RIGHT NOW"), ""]
+        if first_run:
+            main += describe(near_cur) or ["No matching 2h window is free right now.",
+                                           "You will get a message when one opens."]
         else:
-            sections.append("\n".join(["🆕 NEW FREE WINDOWS SINCE LAST RUN", ""] + describe(near_new, "🆕 ")))
             still = {k: v for k, v in near_cur.items() if k not in near_new}
+            if near_new:
+                main += ["🆕 New since last run", ""] + describe(near_new, "🆕 ")
             if still:
-                sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
+                if near_new:
+                    main += ["", "♻️ Still free (reported before)", ""]
+                main += describe(still)
+            if not near_cur:
+                main.append("No matching 2h window is free right now at the main locations.")
+        sections.append("\n".join(main))
         if far_cur:
-            sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + describe_far(far_cur, () if first_run else new, report)))
+            sections.append("\n".join([heading(ALT_HEADER), ""] + describe_far(far_cur, () if first_run else new, report)))
         sections.append("\n".join(coverage_footer(report, now)))
         pick = show or near_cur
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
