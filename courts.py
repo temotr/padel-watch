@@ -32,6 +32,15 @@ FAR_LOCATIONS = [  # alternative locations: shown at the end, never start an ale
     ("4797", "Europahalle"),
     ("4858", "Playpadel Gänserndorf"),
 ]
+# Padelzone is booked on Eversports, which blocks automatic reading (Cloudflare check).
+# These are only shown as links at the end of urgent messages, to be opened by hand.
+PADELZONE_LINKS = [
+    ("Padelzone Vienna Sporthotel (1030)", "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"),
+    ("Padelzone Floridsdorf (1210)", "https://www.eversports.at/sb/padelzone-wien-or-floridsdorf-powered-by-cupra"),
+    ("Padelzone C&C Wienerberg (1100)", "https://www.eversports.at/sb/padelzone-wien-or-candc-wienerberg"),
+    ("Padelzone Hagenbrunn (2102) · Sport König", "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"),
+    ("Padelzone Stockerau (2000)", "https://www.eversports.at/s/padelzone-stockerau"),
+]
 # Locations on another website: (reservation page, name of the date parameter in the link)
 OTHER_SITES = {
     "3660": ("https://www.racketworld.wien/reservierung", "t"),
@@ -283,6 +292,7 @@ NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7�
 
 BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
 UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
+LINK_A, LINK_B, LINK_C = "\x06", "\x07", "\x08"   # link: LINK_A url LINK_B name LINK_C
 ALT_HEADER = "OTHER LOCATIONS FREE RIGHT NOW (farther away)"
 NOTHING = "nothing free for set booking conditions"
 
@@ -300,7 +310,13 @@ def underline(text):
     return f"{UL_ON}{text}{UL_OFF}"
 
 
+def link(name, url):
+    return f"{LINK_A}{url}{LINK_B}{name}{LINK_C}"
+
+
 def plain(text):
+    # ntfy: "Name: https://..." (the URL is tappable there)
+    text = re.sub(f"{LINK_A}(.*?){LINK_B}(.*?){LINK_C}", r"\2: \1", text)
     for m in (BOLD_ON, BOLD_OFF, UL_ON, UL_OFF):
         text = text.replace(m, "")
     return text
@@ -308,6 +324,8 @@ def plain(text):
 
 def telegram_html(text):
     out = html.escape(text, quote=False)
+    out = re.sub(f"{LINK_A}(.*?){LINK_B}(.*?){LINK_C}",
+                 lambda m: f'<a href="{m.group(1).replace(chr(34), "%22")}">{m.group(2)}</a>', out)
     for mark, tag in ((BOLD_ON, "<b>"), (BOLD_OFF, "</b>"), (UL_ON, "<u>"), (UL_OFF, "</u>")):
         out = out.replace(mark, tag)
     return out
@@ -515,6 +533,11 @@ def describe_urgent(near_cur, new_keys, report):
             lines.append(f"✅ {bold(short_label(loc))}")
             lines.extend(day_lines)
     return lines
+
+
+def padelzone_block():
+    return "\n".join([heading("PADELZONE · NOT CHECKED AUTOMATICALLY (open to check)"), ""]
+                     + [f"🔗 {link(name, url)}" for name, url in PADELZONE_LINKS])
 
 
 def checked_lines_urgent(report):
@@ -890,7 +913,9 @@ def run_all(page, today=None, now=None):
             if far_cur:
                 far = describe_far(far_cur, () if first_run else new, report)
                 sections.append("\n".join([heading(ALT_HEADER), ""] + far))
-            sections.append("\n".join(checked_lines_urgent(report)) + '\n\nSend "stop" to end urgent mode.')
+            sections.append("\n".join(checked_lines_urgent(report)))
+            sections.append(padelzone_block())
+            sections.append('Send "stop" to end urgent mode.')
             title = make_title(show, first_run)
             notify(title, "\n\n".join(sections), click_url(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0]))
             save_state(current)
@@ -913,6 +938,7 @@ def run_all(page, today=None, now=None):
         if far_cur:
             sections.append("\n".join([heading(ALT_HEADER), ""] + describe_far(far_cur, () if first_run else new, report)))
         sections.append("\n".join(coverage_footer(report, now)))
+        sections.append(padelzone_block())
         pick = show or near_cur
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
         title = "Padeldome check (on request)" if forced and not first_run else make_title(show, first_run)
