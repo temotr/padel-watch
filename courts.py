@@ -279,6 +279,7 @@ NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7�
 BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
 UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
 ALT_HEADER = "➕ ALTERNATIVE LOCATIONS FREE (farther away)"
+NOTHING = "nothing free for set booking conditions"
 
 
 def bold(text):
@@ -500,9 +501,9 @@ def describe_urgent(near_cur, new_keys, report):
         if lines:
             lines.append("")
         if all(l.endswith(": –") for l in day_lines):
-            lines.append(f"{bold(short_label(loc))}: nothing free")
+            lines.append(f"❌ {bold(short_label(loc))}: {NOTHING}")
         else:
-            lines.append(bold(short_label(loc)))
+            lines.append(f"✅ {bold(short_label(loc))}")
             lines.extend(day_lines)
     return lines
 
@@ -551,18 +552,25 @@ def describe(items, prefix=""):
     return lines
 
 
-def describe_far(items, new=()):
-    """Farther locations, very short: one line per location with the free time ranges per day."""
+def describe_far(items, new=(), report=None):
+    """Alternative locations: per location one line per time range, with the days after it.
+
+    🆕 Europahalle (1230)
+    20:00-22:00 · Thu 19.11 · Mon 23.11
+    Alterlaa (1230) · nothing free
+    """
     by_loc = {}
     for (loc, date, hhmm) in items:
         if is_far(loc):
             by_loc.setdefault(loc, {}).setdefault(date, []).append(minutes(hhmm))
-    lines = []
+    new_set = {(k[0], k[1], minutes(k[2])) for k in new}
+    lines, nothing = [], []
     for loc, _ in FAR_LOCATIONS:
         days = by_loc.get(loc)
+        name = loc_name(loc).replace("Padeldome ", "")
         if not days:
             continue
-        pieces = []
+        ranges, all_new = {}, bool(new_set)
         for date in sorted(days):
             spans = []
             for st in sorted(days[date]):
@@ -572,10 +580,24 @@ def describe_far(items, new=()):
                 else:
                     spans.append([st, en])
             d = dt.date.fromisoformat(date)
-            rng = ", ".join(f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}" for a, b in spans)
-            is_new = any(k[0] == loc and k[1] == date for k in new)
-            pieces.append(f"{'🆕 ' if is_new else ''}{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m} {rng}")
-        lines.append(f"{loc_name(loc)}: " + " · ".join(pieces))
+            for a_, b_ in spans:
+                is_new = any((loc, date, m) in new_set for m in days[date] if a_ <= m < b_)
+                all_new = all_new and is_new
+                ranges.setdefault((a_, b_), []).append(
+                    (f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m}", is_new))
+        if lines:
+            lines.append("")
+        lines.append(f"{'🆕 ' if all_new else ''}{name}")
+        for (a_, b_), day_list in sorted(ranges.items()):
+            rng = f"{a_ // 60:02d}:{a_ % 60:02d}-{b_ // 60:02d}:{b_ % 60:02d}"
+            if b_ - a_ > DURATION_MIN:
+                rng += f" ({(b_ - a_) / 60:g}h free)"
+            lines.append(f"{rng} · " + " · ".join(
+                f"{'🆕 ' if (n and not all_new) else ''}{lbl}" for lbl, n in day_list))
+    if nothing:
+        if lines:
+            lines.append("")
+        lines.extend(nothing)
     return lines
 
 
@@ -597,36 +619,42 @@ def header_lines(now):
 
 
 def coverage_footer(report, now):
-    """report: {loc: [(date, slots, windows, ok), ...]} -> lines for the end of a push."""
-    lines = ["🔎 DAYS CHECKED"]
-    for loc, _ in LOCATIONS:
-        rows = report.get(loc)
-        if rows is None:
-            continue
-        free = [f"{d:%d.%m} ({n} {'window' if n == 1 else 'windows'})"
-                for d, slots, n, ok in rows if n]
-        none = [f"{d:%d.%m}" for d, slots, n, ok in rows if ok and not n]
-        bad = [f"{d:%d.%m}" for d, slots, n, ok in rows if not ok and not n]
-        lines.append("")
-        lines.append(loc_label(loc))
-        if free:
-            lines.append("✅ free: " + ", ".join(free))
-        if none:
-            lines.append("– none fit: " + ", ".join(none))
-        if bad:
-            lines.append("⚠️ not read / not bookable yet: " + ", ".join(bad))
-    for loc, name in FAR_LOCATIONS:
-        rows = report.get(loc)
-        if rows is None:
-            continue
+    """Short overview of what was checked: one line per location."""
+    days = sorted({d for rows in report.values() for d, *_ in rows})
+    wd = sorted(WEEKDAYS)
+    names = [WEEKDAY_NAMES[i][:3] for i in wd]
+    day_txt = f"{names[0]}-{names[-1]}" if wd == list(range(wd[0], wd[-1] + 1)) and len(wd) > 1 else ", ".join(names)
+    lines = [f"🔎 CHECKED {days[0]:%d.%m}-{days[-1]:%d.%m} · {day_txt}"]
+    later = set()
+
+    def status(rows):
         free = [f"{d:%d.%m}" for d, slots, n, ok in rows if n]
-        bad = [f"{d:%d.%m}" for d, slots, n, ok in rows if not ok and not n]
-        bits = ["✅ " + ", ".join(free)] if free else ["none fit"]
+        bad = []
+        for d, slots, n, ok in rows:
+            if n or ok:
+                continue
+            if bookable(d.isoformat(), START_TIMES[-1], now):
+                bad.append(f"{d:%d.%m}")
+            else:
+                later.add(d)
+        return free, bad
+
+    for loc, name in LOCATIONS + FAR_LOCATIONS:
+        rows = report.get(loc)
+        if rows is None:
+            continue
+        free, bad = status(rows)
+        short = name.replace("Padeldome ", "")
+        mark = ""
         if bad:
-            bits.append("⚠️ " + ", ".join(bad))
-        if lines and lines[-1] != "" and not any(l.startswith("➕") for l in lines):
-            lines.append("")
-        lines.append(f"➕ {loc_name(loc)}: " + " · ".join(bits))
+            lines.append(f"⚠️ {mark}{short} · not read: " + ", ".join(bad))
+        elif free:
+            lines.append(f"✅ {mark}{short} · free on " + ", ".join(free) + " (see above)")
+        else:
+            lines.append(f"❌ {mark}{short} · {NOTHING}")
+    if later:
+        lines.append("⏳ " + ", ".join(f"{d:%d.%m}" for d in sorted(later))
+                     + " · not bookable yet (opens 14 days before each start)")
     return lines
 
 
@@ -847,8 +875,8 @@ def run_all(page, today=None, now=None):
             # Urgent mode: one summary block per location, new ranges marked with 🆕.
             sections.append("\n".join(describe_urgent(near_cur, () if first_run else near_new, report)))
             if far_cur:
-                far = describe_far(far_cur, () if first_run else new)
-                sections.append("\n".join([bold(underline(ALT_HEADER))] + [l.replace("Padeldome ", "") for l in far]))
+                far = describe_far(far_cur, () if first_run else new, report)
+                sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + far))
             sections.append(checked_line_urgent(report) + '\nSend "stop" to end urgent mode.')
             title = make_title(show, first_run)
             notify(title, "\n\n".join(sections), click_url(sorted(show or near_cur)[0][0] if (show or near_cur) else LOCATIONS[0][0]))
@@ -873,7 +901,7 @@ def run_all(page, today=None, now=None):
             if still:
                 sections.append("\n".join(["♻️ STILL FREE (already reported before)", ""] + describe(still)))
         if far_cur:
-            sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + describe_far(far_cur, () if first_run else new)))
+            sections.append("\n".join([bold(underline(ALT_HEADER)), ""] + describe_far(far_cur, () if first_run else new, report)))
         sections.append("\n".join(coverage_footer(report, now)))
         pick = show or near_cur
         first_loc = sorted(pick)[0][0] if pick else LOCATIONS[0][0]
