@@ -35,6 +35,13 @@ WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
 START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
 DURATION_MIN = 120              # a court must be free for this long
 MAX_WINDOWS = 25                # max windows listed in one notification
+POSTCODES = {  # shown in brackets after the location name (Vienna postcode = district)
+    "5175": "1220",   # The Dome Stadlau (22nd district)
+    "2665": "1030",   # Padeldome Erdberg (3rd district)
+    "2667": "1220",   # Padeldome Süßenbrunn, Weingartenallee 22
+    "3216": "1210",   # Padeldome Alte Donau, Arbeiterstrandbadstraße 87A
+    "2668": "1230",   # Padeldome Alterlaa, Anton-Baumgartner-Straße 40
+}
 URGENT_DAYS = 2                 # urgent mode: today and tomorrow
 SNAP = pathlib.Path("courts_state.txt")
 URGENT_SNAP = pathlib.Path("urgent_state.txt")
@@ -122,26 +129,35 @@ def half_hour(ts):
     return round(ts / 1800) * 1800
 
 
-def chain(courts_, order, s, e, tol=120):
-    """Cover [s, e] with free intervals of several courts, fewest changes.
+def tiles(slots, s, e, tol=120):
+    """True when bookable slots follow each other exactly from s to e.
 
-    courts_: {cid: merged free intervals}. Returns [(cid, from_ts, to_ts)] or None.
+    A court's slots are fixed blocks (1 hour, starting at :00 on some courts and at :30 on
+    others), so a booking can only start where a slot starts.
     """
     t = s
-    segs = []
     while t < e - tol:
-        best = None
-        for cid, merged in courts_.items():
-            for a, b in merged:
-                if a <= t + tol and b > t + tol:
-                    cand = (b, -order.get(cid, 999), cid)
-                    if best is None or cand > best:
-                        best = cand
-        if best is None or len(segs) >= 8:
+        nxt = next((b for a, b in slots if abs(a - t) <= tol and b > t + tol), None)
+        if nxt is None:
+            return False
+        t = nxt
+    return True
+
+
+def chain(courts_, order, s, e, tol=120):
+    """Cover [s, e] with slots of several courts, one slot after the other, fewest changes.
+
+    courts_: {cid: [(slot_start, slot_end), ...]}. Returns [(cid, from_ts, to_ts)] or None.
+    """
+    t, prev, segs = s, None, []
+    while t < e - tol:
+        cands = [(cid, b) for cid, sl in courts_.items() for a, b in sl
+                 if abs(a - t) <= tol and b > t + tol]
+        if not cands or len(segs) >= 8:
             return None
-        b, _, cid = best
+        cid, b = max(cands, key=lambda c: (c[0] == prev, -order.get(c[0], 999)))
         segs.append((cid, t, min(b, e)))
-        t = b
+        t, prev = b, cid
     return segs
 
 
@@ -153,7 +169,7 @@ def find_windows(free, names, targets):
     by_date = {}
     for (cid, date), intervals in free.items():
         if date in targets:
-            by_date.setdefault(date, {})[cid] = merge(intervals)
+            by_date.setdefault(date, {})[cid] = sorted(intervals)
     order = {cid: i for i, cid in enumerate(names)}
 
     def nm(cid):
@@ -167,7 +183,7 @@ def find_windows(free, names, targets):
             e = s + DURATION_MIN * 60
             end_txt = hhmm_of(e)
             singles = sorted(
-                (c for c, mv in courts_.items() if covers(mv, s, e)),
+                (c for c, sl in courts_.items() if tiles(sl, s, e)),
                 key=lambda c: order.get(c, 999),
             )
             if singles:
@@ -215,7 +231,8 @@ def ingest(data, free, names, seen_dates, seen_slots, stats=None, only_date=None
                 row[3] += 1
         if is_free:
             n_free += 1
-            free.setdefault((cid, date), []).append((begin, begin + height / ppm * 60))
+            length = max(1800, round(height / ppm * 60 / 1800) * 1800)  # 3600 for 1-hour slots
+            free.setdefault((cid, date), []).append((begin, begin + length))
     return n_total, n_free
 
 
@@ -241,14 +258,21 @@ def is_far(loc):
     return loc in {l for l, _ in FAR_LOCATIONS}
 
 
+def loc_name(loc):
+    """'Padeldome Süßenbrunn (1220)'"""
+    name = dict(LOCATIONS).get(loc) or dict(FAR_LOCATIONS).get(loc, loc)
+    plz = POSTCODES.get(loc)
+    return f"{name} ({plz})" if plz else name
+
+
 def loc_label(loc):
-    """'3️⃣ Padeldome Süßenbrunn' - the number is the position in LOCATIONS."""
+    """'3️⃣ Padeldome Süßenbrunn (1220)' - the number is the position in LOCATIONS."""
     names = dict(LOCATIONS)
     if loc in names:
         idx = [l for l, _ in LOCATIONS].index(loc)
         num = NUMBERS[idx] if idx < len(NUMBERS) else "•"
-        return f"{num} {names[loc]}"
-    return f"➕ {dict(FAR_LOCATIONS).get(loc, loc)}"
+        return f"{num} {loc_name(loc)}"
+    return f"➕ {loc_name(loc)}"
 
 
 def minutes(hhmm):
@@ -278,7 +302,7 @@ def compress_day(rows):
     for courts, lst in singles.items():
         runs, run = [], [lst[0]]
         for item in lst[1:]:
-            if minutes(item[0]) - minutes(run[-1][0]) <= 30:
+            if minutes(item[0]) <= minutes(run[-1][1]):
                 run.append(item)
             else:
                 runs.append(run)
@@ -349,7 +373,7 @@ def describe_far(items, new=()):
             rng = ", ".join(f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}" for a, b in spans)
             is_new = any(k[0] == loc and k[1] == date for k in new)
             pieces.append(f"{'🆕 ' if is_new else ''}{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m} {rng}")
-        lines.append(f"{dict(FAR_LOCATIONS)[loc]}: " + " · ".join(pieces))
+        lines.append(f"{loc_name(loc)}: " + " · ".join(pieces))
     return lines
 
 
@@ -398,7 +422,7 @@ def coverage_footer(report, now):
             bits.append("⚠️ " + ", ".join(bad))
         if lines and lines[-1] != "" and not any(l.startswith("➕") for l in lines):
             lines.append("")
-        lines.append(f"➕ {name}: " + " · ".join(bits))
+        lines.append(f"➕ {loc_name(loc)}: " + " · ".join(bits))
     return lines
 
 
