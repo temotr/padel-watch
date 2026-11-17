@@ -1,4 +1,4 @@
-"""Watches free padel courts at several Padeldome locations and sends an ntfy push.
+"""Watches free padel courts at several Padeldome locations and sends a Telegram message.
 
 A 2-hour window is reported when it starts at one of START_TIMES, on
 Monday-Thursday within the next 14 days, and is free at one location either
@@ -290,8 +290,9 @@ def ingest(data, free, names, seen_dates, seen_slots, stats=None, only_date=None
 NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 
 
-BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers; ntfy shows plain text, Telegram shows bold
+BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers, turned into Telegram HTML
 UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
+SL_A, SL_B, SL_C = "\x0e", "\x0f", "\x10"   # soft link: tappable name in Telegram
 LINK_A, LINK_B, LINK_C = "\x06", "\x07", "\x08"   # link: LINK_A url LINK_B name LINK_C
 ALT_HEADER = "OTHER LOCATIONS FREE RIGHT NOW (farther away)"
 NOTHING = "nothing free for set booking conditions"
@@ -302,7 +303,7 @@ def bold(text):
 
 
 def heading(text):
-    """Section heading: bold and underlined in Telegram, plain in ntfy."""
+    """Section heading: bold and underlined in Telegram, Telegram only."""
     return f"{BOLD_ON}{UL_ON}{text}{UL_OFF}{BOLD_OFF}"
 
 
@@ -314,7 +315,12 @@ def link(name, url):
     return f"{LINK_A}{url}{LINK_B}{name}{LINK_C}"
 
 
+def slink(name, url):
+    return f"{SL_A}{url}{SL_B}{name}{SL_C}"
+
+
 def plain(text):
+    text = re.sub(f"{SL_A}(.*?){SL_B}(.*?){SL_C}", r"\2", text)
     # ntfy: "Name: https://..." (the URL is tappable there)
     text = re.sub(f"{LINK_A}(.*?){LINK_B}(.*?){LINK_C}", r"\2: \1", text)
     for m in (BOLD_ON, BOLD_OFF, UL_ON, UL_OFF):
@@ -324,7 +330,7 @@ def plain(text):
 
 def telegram_html(text):
     out = html.escape(text, quote=False)
-    out = re.sub(f"{LINK_A}(.*?){LINK_B}(.*?){LINK_C}",
+    out = re.sub(f"[{LINK_A}{SL_A}](.*?)[{LINK_B}{SL_B}](.*?)[{LINK_C}{SL_C}]",
                  lambda m: f'<a href="{m.group(1).replace(chr(34), "%22")}">{m.group(2)}</a>', out)
     for mark, tag in ((BOLD_ON, "<b>"), (BOLD_OFF, "</b>"), (UL_ON, "<u>"), (UL_OFF, "</u>")):
         out = out.replace(mark, tag)
@@ -530,7 +536,8 @@ def describe_urgent(near_cur, new_keys, report):
         if all(l.endswith(": –") for l in day_lines):
             lines.append(f"❌ {bold(short_label(loc))}: {NOTHING}")
         else:
-            lines.append(f"✅ {bold(short_label(loc))}")
+            first_day = min(d for (l, d) in grouped if l == loc)
+            lines.append(f"✅ {bold(slink(short_label(loc), day_url(loc, first_day)))}")
             lines.extend(day_lines)
     return lines
 
@@ -577,7 +584,7 @@ def describe(items, prefix=""):
                 if lines:
                     lines.append("")
                 lines.append(bold(f"{WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
-            lines.append(f"{prefix}{loc_label(loc)} · {text}")
+            lines.append(f"{prefix}{slink(loc_label(loc), day_url(loc, date))} · {text}")
             count += 1
     if extra:
         lines.append("")
@@ -620,7 +627,7 @@ def describe_far(items, new=(), report=None):
                     (f"{WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m}", is_new))
         if lines:
             lines.append("")
-        lines.append(f"{'🆕 ' if all_new else ''}{name}")
+        lines.append(f"{'🆕 ' if all_new else ''}{slink(name, day_url(loc, min(days)))}")
         for (a_, b_), day_list in sorted(ranges.items()):
             rng = f"{a_ // 60:02d}:{a_ % 60:02d}-{b_ // 60:02d}:{b_ % 60:02d}"
             if b_ - a_ > DURATION_MIN:
@@ -703,7 +710,27 @@ def make_title(show, first_run):
     return "Free padel court" if n == 1 else f"{n} free padel options"
 
 
-def send_telegram(title, message, click):
+def day_url(loc, date_iso):
+    ts = int(dt.datetime.combine(dt.date.fromisoformat(date_iso), dt.time(8, 0), TZ).timestamp())
+    return page_url(loc, ts)
+
+
+def free_buttons(current):
+    """One button per location with something free: opens that location on its earliest free day."""
+    first = {}
+    for (loc, date, _hhmm) in current:
+        if loc not in first or date < first[loc]:
+            first[loc] = date
+    out = []
+    for loc, _ in LOCATIONS + FAR_LOCATIONS:
+        if loc in first:
+            d = dt.date.fromisoformat(first[loc])
+            out.append((f"{short_label(loc)} · {WEEKDAY_NAMES[d.weekday()][:3]} {d:%d.%m}",
+                        day_url(loc, first[loc])))
+    return out
+
+
+def send_telegram(title, message, click, buttons=()):
     """Optional second channel. Needs the secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat = os.environ.get("TELEGRAM_CHAT_ID")
@@ -718,7 +745,8 @@ def send_telegram(title, message, click):
         "text": telegram_html(text),
         "disable_web_page_preview": "true",
         "reply_markup": json.dumps(
-            {"inline_keyboard": [[{"text": "Open booking page", "url": click}]]}
+            {"inline_keyboard": [[{"text": t, "url": u}] for t, u in list(buttons)[:8]]
+             or [[{"text": "Open booking page", "url": click}]]}
         ),
     }
     req = urllib.request.Request(
@@ -736,21 +764,9 @@ def send_telegram(title, message, click):
     return False
 
 
-def notify(title, message, click, tags="tennis"):
-    sent = False
-    topic = os.environ.get("NTFY_TOPIC")
-    if topic:
-        req = urllib.request.Request(
-            f"https://ntfy.sh/{topic}",
-            data=plain(message).encode("utf-8"),
-            headers={"Title": title, "Priority": "high", "Click": click, "Tags": tags},
-        )
-        urllib.request.urlopen(req, timeout=20).read()
-        sent = True
-    if send_telegram(title, message, click):
-        sent = True
-    if not sent:
-        print("No notification channel is configured (NTFY_TOPIC or Telegram secrets).")
+def notify(title, message, click, tags="tennis", buttons=()):
+    if not send_telegram(title, message, click, buttons):
+        print("Telegram message was not sent (secrets missing or network error).")
         sys.exit(3)
 
 
