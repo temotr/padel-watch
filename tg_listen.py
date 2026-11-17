@@ -37,7 +37,20 @@ COMMANDS = {
     "padeldome check": "check",
     "padeldome urgent": "urgent",
     "stop": "stop",
+    "/check": "check",       # also work as slash commands (bot menu)
+    "/urgent": "urgent",
+    "/stop": "stop",
+    "/start": "menu",
+    "/menu": "menu",
+    "menu": "menu",
 }
+
+# Buttons that stay at the bottom of the chat; tapping one sends its text.
+KEYBOARD = json.dumps({
+    "keyboard": [[{"text": "padeldome check"}, {"text": "padeldome urgent"}], [{"text": "stop"}]],
+    "resize_keyboard": True,
+    "is_persistent": True,
+})
 
 
 # ---- Telegram ---------------------------------------------------------------
@@ -51,7 +64,7 @@ def tg(method, **params):
 
 def say(text):
     try:
-        tg("sendMessage", chat_id=CHAT, text=text)
+        tg("sendMessage", chat_id=CHAT, text=text, reply_markup=KEYBOARD)
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: reply failed ({type(exc).__name__}).")
 
@@ -147,7 +160,7 @@ def read_commands():
         text = norm(m.get("text"))
         if text in COMMANDS:
             cmds.append(COMMANDS[text])
-        elif text and text != "/start":
+        elif text:
             other = True
     if updates:
         # Confirm everything we have seen, so it is not processed twice.
@@ -178,6 +191,9 @@ def main():
                     say("🚨 Urgent mode ON. I check today and tomorrow about every 5 minutes "
                         "and message you as soon as something opens up. "
                         "Send: stop  to end it (it also ends by itself after 48 hours).")
+            elif cmd == "menu":
+                say("Buttons are ready below: padeldome check = check now, "
+                    "padeldome urgent = watch today + tomorrow, stop = end urgent mode.")
             elif cmd == "stop":
                 if urgent_since():
                     set_urgent(False)
