@@ -4,8 +4,8 @@ Run every minute (cron-job.org -> workflow_dispatch). Only messages from your ow
 chat (TELEGRAM_CHAT_ID) are accepted. Commands:
 
   padeldome check    one full check now, answer = everything free right now
-  padeldome urgent   urgent mode: checks today + tomorrow about every 5 minutes
-                     and messages you when something new opens up
+  padeldome urgent   urgent mode: checks the next 3 days (any time, 2h blocks) about
+                     every 5 minutes and messages you when something new opens up
   stop               ends urgent mode (it also ends by itself after 48 hours)
 
 Urgent mode is remembered in the repo file urgent.txt ("on <time>" or "off").
@@ -188,12 +188,12 @@ def main():
                     set_urgent(True)
                     dispatch("urgent")
                     started_now = True
-                    say("🚨 Urgent mode ON. I check today and tomorrow about every 5 minutes "
+                    say("🚨 Urgent mode ON. I check the next 3 days (any weekday, any time, 2h blocks) about every 5 minutes "
                         "and message you as soon as something opens up. "
                         "Send: stop  to end it (it also ends by itself after 48 hours).")
             elif cmd == "menu":
                 say("Buttons are ready below: padeldome check = check now, "
-                    "padeldome urgent = watch today + tomorrow, stop = end urgent mode.")
+                    "padeldome urgent = watch the next 3 days, stop = end urgent mode.")
             elif cmd == "stop":
                 if urgent_since():
                     set_urgent(False)
@@ -206,7 +206,7 @@ def main():
             say(f"⚠️ Could not run '{cmd}'. See the run log on GitHub.")
             failed = True
     if other and not cmds:
-        say('Commands: "padeldome check" (check now), "padeldome urgent" (watch today + tomorrow), '
+        say('Commands: "padeldome check" (check now), "padeldome urgent" (watch the next 3 days), '
             '"stop" (end urgent mode).')
 
     # Urgent mode upkeep: expire after 48 h, start a new check about every 5 minutes.
