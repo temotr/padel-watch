@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -57,9 +58,20 @@ KEYBOARD = json.dumps({
 def tg(method, **params):
     """Calls the Telegram Bot API. Never prints the URL (it contains the token)."""
     data = urllib.parse.urlencode(params).encode("utf-8")
-    req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/{method}", data=data)
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.loads(r.read().decode("utf-8"))
+    for attempt in range(4):
+        req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/{method}", data=data)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500 and exc.code != 429:
+                raise                       # wrong token, bad request ...: retrying does not help
+            err = exc
+        except (urllib.error.URLError, OSError) as exc:   # e.g. "connection reset by peer"
+            err = exc
+        if attempt < 3:
+            time.sleep(2 * (attempt + 1))
+    raise err
 
 
 def say(text):
@@ -172,7 +184,16 @@ def main():
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
         sys.exit(3)
-    cmds, other = read_commands()
+    try:
+        cmds, other = read_commands()
+    except (urllib.error.URLError, OSError) as exc:
+        if isinstance(exc, urllib.error.HTTPError) and exc.code < 500 and exc.code != 429:
+            print(f"ERROR: Telegram refused the request (HTTP {exc.code}). Check the token and chat ID.")
+            sys.exit(1)
+        # Telegram is sometimes unreachable for a moment. The next run (1 minute later)
+        # tries again, so this is not a failure worth an error e-mail.
+        print(f"WARNING: Telegram not reachable now ({type(exc).__name__}). Trying again next run.")
+        return
     started_now = False
     failed = False
 
