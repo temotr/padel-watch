@@ -95,11 +95,21 @@ def active_weekdays():
     return set(range(7)) if urgent_mode() else WEEKDAYS
 
 
+def urgent_opts():
+    """Filters stored in urgent.txt after the start time: 'evenings' and/or 'main'."""
+    try:
+        words = URGENT_FLAG.read_text(encoding="utf-8").split()
+    except OSError:
+        return set()
+    return {w for w in words if w in ("evenings", "main")}
+
+
 def active_starts():
     """Start times to look for: your evening rules, or every half hour in urgent mode."""
     if not urgent_mode():
         return START_TIMES
-    out, t = [], int(URGENT_FIRST[:2]) * 60 + int(URGENT_FIRST[3:])
+    first = "17:00" if "evenings" in urgent_opts() else URGENT_FIRST
+    out, t = [], int(first[:2]) * 60 + int(first[3:])
     last = int(URGENT_LAST[:2]) * 60 + int(URGENT_LAST[3:])
     while t <= last:
         out.append(f"{t // 60:02d}:{t % 60:02d}")
@@ -534,7 +544,7 @@ def describe_urgent(near_cur, new_keys, report):
         if lines:
             lines.append("")
         if all(l.endswith(": –") for l in day_lines):
-            lines.append(f"❌ {bold(short_label(loc))}: {NOTHING}")
+            lines.append(f"❌ {bold(slink(short_label(loc), click_url(loc)))}: {NOTHING}")
         else:
             first_day = min(d for (l, d) in grouped if l == loc)
             lines.append(f"✅ {bold(slink(short_label(loc), day_url(loc, first_day)))}")
@@ -643,7 +653,10 @@ def describe_far(items, new=(), report=None):
 
 def conditions_text():
     if urgent_mode():
-        return f"Next {URGENT_DAYS} days · any day · {DURATION_MIN / 60:g}h block · any time"
+        opts = urgent_opts()
+        when = "from 17:00" if "evenings" in opts else "any time"
+        where = " · main 4 only" if "main" in opts else ""
+        return f"Next {URGENT_DAYS} days · any day · {DURATION_MIN / 60:g}h block · {when}{where}"
     days = sorted(WEEKDAYS)
     names = [WEEKDAY_NAMES[i][:3] for i in days]
     contiguous = days == list(range(days[0], days[-1] + 1))
@@ -684,11 +697,13 @@ def coverage_footer(report, now):
         if rows is None:
             continue
         free, bad = status(rows)
-        short = short_label(loc)
+        short = slink(short_label(loc), click_url(loc))
         mark = ""
         if bad:
             lines.append(f"⚠️ {mark}{short} · not read: " + ", ".join(bad))
         elif free:
+            first_iso = min(d for d, slots, n, ok in rows if n).isoformat()
+            short = slink(short_label(loc), day_url(loc, first_iso))
             lines.append(f"✅ {mark}{short} · free on " + ", ".join(free) + " (see above)")
         else:
             lines.append(f"❌ {mark}{short} · {NOTHING}")
@@ -839,7 +854,8 @@ def run_all(page, today=None, now=None):
     report = {}
     ok_locations = 0
 
-    for loc, loc_name in LOCATIONS + FAR_LOCATIONS:
+    scan = LOCATIONS if (urgent and "main" in urgent_opts()) else LOCATIONS + FAR_LOCATIONS
+    for loc, loc_name in scan:
         free, names = {}, {}
         seen_dates, seen_slots = set(), set()
         stats = {}
