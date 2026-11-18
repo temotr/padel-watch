@@ -1,0 +1,55 @@
+name: Padel-Austria tournaments
+
+# Hourly check of https://padel-austria.at/tournaments (Wien, Starter, Offener Bewerb / Herren).
+# The Telegram button "Padel-Austria tournaments" starts it with mode=report.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "report = send the full list now"
+        required: false
+        default: ""
+
+concurrency:
+  group: padel-events
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  events:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install browser
+        run: |
+          pip install playwright
+          playwright install chromium
+
+      - name: Check events
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          MODE: ${{ inputs.mode }}
+        run: python events_padel.py
+
+      - name: Save state
+        run: |
+          git config user.name "watcher"
+          git config user.email "watcher@users.noreply.github.com"
+          git add padel_events_state.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Update Padel Austria events state"
+            for i in 1 2 3; do
+              git pull --rebase && git push && break
+              sleep 5
+            done
+          fi
