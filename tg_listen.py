@@ -10,7 +10,7 @@ chat (TELEGRAM_CHAT_ID) are accepted. Buttons (typed phrases work too):
   Extend urgent +48h       restarts the 48 hour timer
   Pause alerts 2h          pauses urgent checks for 2 hours (press again to resume)
   Sun Set events           current list of Sun Set Padel events
-  Padel-Austria tournaments  open events from padel-austria.at (Wien, Starter, Offener Bewerb/Herren)
+  Padel-Austria tournaments  open events from padel-austria.at (Wien, Starter, Offener Bewerb)
   Stop urgent check        ends urgent mode (it also ends by itself after 48 hours)
 
 Urgent mode is remembered in the repo file urgent.txt:
@@ -326,7 +326,7 @@ def main():
                 say(events_text())
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
-                say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb/Herren · not full). The list follows in about 2 minutes.")
+                say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
             elif cmd == "menu":
                 say("Buttons are ready below.")
             elif cmd == "stop":
