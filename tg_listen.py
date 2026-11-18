@@ -10,6 +10,7 @@ chat (TELEGRAM_CHAT_ID) are accepted. Buttons (typed phrases work too):
   Extend urgent +48h       restarts the 48 hour timer
   Pause alerts 2h          pauses urgent checks for 2 hours (press again to resume)
   Sun Set events           current list of Sun Set Padel events
+  Padel-Austria tournaments  open events from padel-austria.at (Wien, Starter, Offener Bewerb/Herren)
   Stop urgent check        ends urgent mode (it also ends by itself after 48 hours)
 
 Urgent mode is remembered in the repo file urgent.txt:
@@ -28,6 +29,7 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 WORKFLOW = "courts.yml"
+EVENTS_WORKFLOW = "padel_events.yml"
 FLAG = "urgent.txt"
 URGENT_STATE = "urgent_state.txt"
 MAX_AGE_SEC = 30 * 60          # ignore Telegram messages older than this
@@ -51,6 +53,8 @@ COMMANDS = {
     "extend urgent +48h": "extend",
     "pause alerts 2h": "pause",
     "sun set events": "events",
+    "padel-austria tournaments": "padel_events",
+    "padel austria events": "padel_events",
     "stop urgent check": "stop",
     # earlier phrases keep working
     "padeldome check": "check",
@@ -70,7 +74,8 @@ KEYBOARD = json.dumps({
         [{"text": "🎾 Check all options"}, {"text": "🚨 Urgent padel"}],
         [{"text": "🌙 Urgent evenings only"}, {"text": "🏠 Urgent main 4 only"}],
         [{"text": "⏱ Extend urgent +48h"}, {"text": "🔕 Pause alerts 2h"}],
-        [{"text": "📅 Sun Set events"}, {"text": "🛑 Stop urgent check"}],
+        [{"text": "📅 Sun Set events"}, {"text": "🏆 Padel-Austria tournaments"}],
+        [{"text": "🛑 Stop urgent check"}],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -121,8 +126,8 @@ def gh(path, body=None, method=None):
     return json.loads(raw) if raw else {}
 
 
-def dispatch(mode):
-    gh(f"actions/workflows/{WORKFLOW}/dispatches", {"ref": REF, "inputs": {"mode": mode}})
+def dispatch(mode, workflow=None):
+    gh(f"actions/workflows/{workflow or WORKFLOW}/dispatches", {"ref": REF, "inputs": {"mode": mode}})
 
 
 def last_run():
@@ -319,6 +324,9 @@ def main():
                     started_now = True
             elif cmd == "events":
                 say(events_text())
+            elif cmd == "padel_events":
+                dispatch("report", EVENTS_WORKFLOW)
+                say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb/Herren · not full). The list follows in about 2 minutes.")
             elif cmd == "menu":
                 say("Buttons are ready below.")
             elif cmd == "stop":
