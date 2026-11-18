@@ -439,11 +439,14 @@ def update_status(force=False):
     try:
         text = build_status()
         mid = pinned_status_id()
+        source = "pinned message"
         if not mid:
+            source = "repo file"
             try:
                 mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
             except (OSError, ValueError):
                 pass
+        print(f"STATUS: message id {mid} (from {source})" if mid else "STATUS: no status message known, creating one.")
         if mid:
             try:
                 tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
@@ -451,9 +454,17 @@ def update_status(force=False):
                 return
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
-                if "not modified" in body:
+                low = body.lower()
+                if "not modified" in low:
                     return
-                print(f"WARNING: status message could not be edited (HTTP {exc.code}), creating a new one.")
+                gone = exc.code in (400, 404) and ("not found" in low or "invalid" in low or "can't be edited" in low)
+                print(f"STATUS: edit of message {mid} failed: HTTP {exc.code} {body[:200]}")
+                if not gone:
+                    return          # temporary problem: never create a second message because of it
+                print("STATUS: the old status message is gone, creating a new one.")
+            except (urllib.error.URLError, OSError) as exc:
+                print(f"STATUS: edit of message {mid} failed ({type(exc).__name__}), will retry next time.")
+                return
         res = tg("sendMessage", chat_id=CHAT, text=text, reply_markup=keyboard(),
                  disable_web_page_preview="true")
         mid = res["result"]["message_id"]
