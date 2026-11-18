@@ -431,8 +431,25 @@ def pinned_status_id():
     return None
 
 
-def update_status(force=False):
-    """Edits the pinned status message (creates + pins it the first time). Never raises."""
+def save_via_api(path, text, message):
+    """Saves a file in the repo through the GitHub API (more reliable than git push races)."""
+    import base64
+    sha = None
+    try:
+        sha = gh(f"contents/{path}?ref={REF}").get("sha")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+    body = {"message": message, "branch": REF,
+            "content": base64.b64encode(text.encode("utf-8")).decode("ascii")}
+    if sha:
+        body["sha"] = sha
+    gh(f"contents/{path}", body, method="PUT")
+
+
+def update_status(force=False, create=False):
+    """Edits the pinned status message. It is created ONLY when create=True (you typed 'status').
+    Automatic runs never create a message, so they can never spam the chat. Never raises."""
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
     if not force and now.minute % STATUS_EVERY_MIN != 0:
         return
@@ -446,6 +463,9 @@ def update_status(force=False):
                 mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
             except (OSError, ValueError):
                 pass
+        if not mid and not create:
+            print("STATUS: no status message known. Type 'status' in the chat to create it.")
+            return
         print(f"STATUS: message id {mid} (from {source})" if mid else "STATUS: no status message known, creating one.")
         if mid:
             try:
@@ -461,6 +481,9 @@ def update_status(force=False):
                 print(f"STATUS: edit of message {mid} failed: HTTP {exc.code} {body[:200]}")
                 if not gone:
                     return          # temporary problem: never create a second message because of it
+                if not create:
+                    print("STATUS: the status message is gone. Type 'status' to create a new one.")
+                    return
                 print("STATUS: the old status message is gone, creating a new one.")
             except (urllib.error.URLError, OSError) as exc:
                 print(f"STATUS: edit of message {mid} failed ({type(exc).__name__}), will retry next time.")
@@ -472,10 +495,10 @@ def update_status(force=False):
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: could not pin the status message ({type(exc).__name__}). Pin it by hand.")
-        try:   # only a backup: Telegram itself tells us which message is pinned
-            with open(STATUS_FILE, "w", encoding="utf-8") as f:
-                f.write(f"{mid}\n")
-            commit_files("Status message id", add=[STATUS_FILE])
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{mid}\n")
+        try:   # backup for the pinned-message lookup
+            save_via_api(STATUS_FILE, f"{mid}\n", "Status message id")
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: could not save the status message id ({type(exc).__name__}).")
     except Exception as exc:  # noqa: BLE001
@@ -548,7 +571,7 @@ def main():
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
             elif cmd == "status":
-                update_status(force=True)
+                update_status(force=True, create=True)
                 say("📌 Status updated. It stays pinned at the top of this chat.")
             elif cmd == "menu":
                 say(HELP)
