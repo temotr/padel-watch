@@ -302,6 +302,8 @@ NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7�
 
 BOLD_ON, BOLD_OFF = "\x02", "\x03"   # markers, turned into Telegram HTML
 UL_ON, UL_OFF = "\x04", "\x05"       # underline (Telegram only)
+IT_ON, IT_OFF = "\x11", "\x12"       # italic (Telegram only)
+BQ_ON, BQ_OFF = "\x13", "\x14"       # quote block (Telegram only)
 SL_A, SL_B, SL_C = "\x0e", "\x0f", "\x10"   # soft link: tappable name in Telegram
 LINK_A, LINK_B, LINK_C = "\x06", "\x07", "\x08"   # link: LINK_A url LINK_B name LINK_C
 ALT_HEADER = "OTHER LOCATIONS FREE RIGHT NOW (farther away)"
@@ -333,7 +335,7 @@ def plain(text):
     text = re.sub(f"{SL_A}(.*?){SL_B}(.*?){SL_C}", r"\2", text)
     # ntfy: "Name: https://..." (the URL is tappable there)
     text = re.sub(f"{LINK_A}(.*?){LINK_B}(.*?){LINK_C}", r"\2: \1", text)
-    for m in (BOLD_ON, BOLD_OFF, UL_ON, UL_OFF):
+    for m in (BOLD_ON, BOLD_OFF, UL_ON, UL_OFF, IT_ON, IT_OFF, BQ_ON, BQ_OFF):
         text = text.replace(m, "")
     return text
 
@@ -342,7 +344,8 @@ def telegram_html(text):
     out = html.escape(text, quote=False)
     out = re.sub(f"[{LINK_A}{SL_A}](.*?)[{LINK_B}{SL_B}](.*?)[{LINK_C}{SL_C}]",
                  lambda m: f'<a href="{m.group(1).replace(chr(34), "%22")}">{m.group(2)}</a>', out)
-    for mark, tag in ((BOLD_ON, "<b>"), (BOLD_OFF, "</b>"), (UL_ON, "<u>"), (UL_OFF, "</u>")):
+    for mark, tag in ((BOLD_ON, "<b>"), (BOLD_OFF, "</b>"), (UL_ON, "<u>"), (UL_OFF, "</u>"),
+                      (IT_ON, "<i>"), (IT_OFF, "</i>"), (BQ_ON, "<blockquote>"), (BQ_OFF, "</blockquote>")):
         out = out.replace(mark, tag)
     return out
 
