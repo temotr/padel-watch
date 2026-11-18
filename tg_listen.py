@@ -1,17 +1,11 @@
 """Telegram remote control for the Padeldome court check.
 
 Run every minute (cron-job.org -> workflow_dispatch). Only messages from your own
-chat (TELEGRAM_CHAT_ID) are accepted. Buttons (typed phrases work too):
+chat (TELEGRAM_CHAT_ID) are accepted.
 
-  Check all options        one full check now, answer = everything free right now
-  Urgent padel             next 3 days, any time, all locations, about every 5 minutes
-  Urgent evenings only     same, but only starts from 17:00
-  Urgent main 4 only       same, but only the 4 main locations
-  Extend urgent +48h       restarts the 48 hour timer
-  Pause alerts 2h          pauses urgent checks for 2 hours (press again to resume)
-  Sun Set events           current list of Sun Set Padel events
-  Padel-Austria tournaments  open events from padel-austria.at (Wien, Starter, Offener Bewerb)
-  Stop urgent check        ends urgent mode (it also ends by itself after 48 hours)
+Buttons:   Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events
+           ("Urgent padel" asks which urgent check; while urgent is on: Stop, Pause, Extend)
+Typed words (see HELP below): stop, pause, extend, evenings, main 4, sun set, help
 
 Urgent mode is remembered in the repo file urgent.txt:
   "off"  or  "on <time> [evenings] [main] [pause=<time>]"
@@ -48,14 +42,28 @@ REF = os.environ.get("GITHUB_REF_NAME", "main") or "main"
 COMMANDS = {
     "check all options": "check",
     "urgent padel": "urgent",
-    "urgent evenings only": "evenings",
-    "urgent main 4 only": "main",
+    "urgent evenings only": "start_evenings",
+    "urgent main 4 only": "start_main",
     "extend urgent +48h": "extend",
     "pause alerts 2h": "pause",
+    "resume alerts": "pause",
+    "all locations": "start_all",
     "sun set events": "events",
     "padel-austria tournaments": "padel_events",
     "padel austria events": "padel_events",
     "stop urgent check": "stop",
+    # short words you can type
+    "pause": "pause",
+    "extend": "extend",
+    "evenings": "start_evenings",
+    "evening": "start_evenings",
+    "main 4": "start_main",
+    "main": "start_main",
+    "sun set": "events",
+    "tournaments": "padel_events",
+    "help": "menu",
+    "check": "check",
+    "urgent": "urgent",
     # earlier phrases keep working
     "padeldome check": "check",
     "padeldome urgent": "urgent",
@@ -69,17 +77,37 @@ COMMANDS = {
 }
 
 # Buttons that stay at the bottom of the chat; tapping one sends its text.
-KEYBOARD = json.dumps({
-    "keyboard": [
-        [{"text": "🎾 Check all options"}, {"text": "🚨 Urgent padel"}],
-        [{"text": "🌙 Urgent evenings only"}, {"text": "🏠 Urgent main 4 only"}],
-        [{"text": "⏱ Extend urgent +48h"}, {"text": "🔕 Pause alerts 2h"}],
-        [{"text": "📅 Sun Set events"}, {"text": "🏆 Padel-Austria tournaments"}],
-        [{"text": "🛑 Stop urgent check"}],
-    ],
-    "resize_keyboard": True,
-    "is_persistent": True,
-})
+def keyboard():
+    """Bottom buttons. Urgent off: 4 buttons. Urgent on: Stop, Pause and Extend appear."""
+    flag = read_flag()
+    if not flag:
+        rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
+                ["🚨 Urgent padel", "📅 Sun Set events"]]
+    else:
+        paused = flag["pause"] and flag["pause"] > dt.datetime.now(dt.timezone.utc)
+        rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
+                ["📅 Sun Set events", "🛑 Stop urgent check"],
+                ["▶️ Resume alerts" if paused else "🔕 Pause alerts 2h", "⏱ Extend urgent +48h"]]
+    return json.dumps({
+        "keyboard": [[{"text": t} for t in row] for row in rows],
+        "resize_keyboard": True,
+        "is_persistent": True,
+    })
+
+
+# Small buttons under the "which urgent check?" message
+URGENT_CHOICES = json.dumps({"inline_keyboard": [
+    [{"text": "🚨 All locations, any time", "callback_data": "start_all"}],
+    [{"text": "🌙 Evenings only (from 17:00)", "callback_data": "start_evenings"}],
+    [{"text": "🏠 Main 4 locations only", "callback_data": "start_main"}],
+]})
+CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "start_main": "start_main"}
+
+HELP = (
+    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events.\n"
+    "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
+    "You can also type: stop · pause · extend · evenings · main 4 · sun set · help"
+)
 
 
 # ---- Telegram ---------------------------------------------------------------
@@ -102,9 +130,9 @@ def tg(method, **params):
     raise err
 
 
-def say(text):
+def say(text, markup=None):
     try:
-        tg("sendMessage", chat_id=CHAT, text=text, reply_markup=KEYBOARD)
+        tg("sendMessage", chat_id=CHAT, text=text, reply_markup=markup or keyboard())
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: reply failed ({type(exc).__name__}).")
 
@@ -241,11 +269,29 @@ def norm(text):
 
 
 def read_commands():
-    res = tg("getUpdates", timeout=0, allowed_updates=json.dumps(["message"]))
+    res = tg("getUpdates", timeout=0, allowed_updates=json.dumps(["message", "callback_query"]))
     updates = res.get("result", [])
     cmds, other, last_id, now = [], False, 0, time.time()
     for u in updates:
         last_id = max(last_id, u["update_id"])
+        cb = u.get("callback_query")
+        if cb:                                       # tap on a small button under a message
+            if str((cb.get("message") or {}).get("chat", {}).get("id")) != str(CHAT):
+                continue
+            try:
+                tg("answerCallbackQuery", callback_query_id=cb["id"])
+            except Exception:  # noqa: BLE001
+                pass
+            mid = (cb.get("message") or {}).get("message_id")
+            if mid:
+                try:   # remove the small buttons so they are not tapped twice
+                    tg("editMessageReplyMarkup", chat_id=CHAT, message_id=mid,
+                       reply_markup=json.dumps({"inline_keyboard": []}))
+                except Exception:  # noqa: BLE001
+                    pass
+            if cb.get("data") in CALLBACKS:
+                cmds.append(CALLBACKS[cb["data"]])
+            continue
         m = u.get("message") or {}
         if str(m.get("chat", {}).get("id")) != str(CHAT):
             print("Ignored a message from another chat.")
@@ -286,8 +332,10 @@ def main():
             if cmd == "check":
                 dispatch("report")
                 say("🔎 Checking all locations now. The answer follows in about 3 minutes.")
-            elif cmd in ("urgent", "evenings", "main"):
-                opts = {"urgent": [], "evenings": ["evenings"], "main": ["main"]}[cmd]
+            elif cmd == "urgent":
+                say("🚨 Which urgent check? (next 3 days, 2h blocks, about every 5 minutes)", URGENT_CHOICES)
+            elif cmd in ("start_all", "start_evenings", "start_main"):
+                opts = {"start_all": [], "start_evenings": ["evenings"], "start_main": ["main"]}[cmd]
                 flag = read_flag()
                 if flag and flag["opts"] == opts:
                     say(f"🚨 Urgent mode is already on ({opts_text(opts)}). Send: stop urgent check  to end it.")
@@ -298,7 +346,7 @@ def main():
                     say(f"🚨 Urgent mode {'switched' if flag else 'ON'}: {opts_text(opts)}. "
                         "I check the next 3 days (any weekday, 2h blocks) about every 5 minutes "
                         "and message you as soon as something opens up. No checks 23:00-07:00. "
-                        "It ends by itself after 48 hours.")
+                        "It ends by itself after 48 hours.\n\nButtons below: Pause · Extend · Stop")
             elif cmd == "extend":
                 flag = read_flag()
                 if not flag:
@@ -328,7 +376,7 @@ def main():
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
             elif cmd == "menu":
-                say("Buttons are ready below.")
+                say(HELP)
             elif cmd == "stop":
                 if urgent_since():
                     set_urgent(False)
@@ -341,7 +389,7 @@ def main():
             say(f"⚠️ Could not run '{cmd}'. See the run log on GitHub.")
             failed = True
     if other and not cmds:
-        say("Use the buttons below.")
+        say(HELP)
 
     # Urgent mode upkeep: expire after 48 h, start a new check about every 5 minutes.
     flag = read_flag()
