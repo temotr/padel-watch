@@ -51,6 +51,19 @@ def split_lines(text):
     return [x.strip() for l in text.splitlines() for x in re.split(r"\t+| {2,}", l) if x.strip()]
 
 
+def card_status(block):
+    """The registration button text: the line right after the spots (e.g. 'Anmeldung geschlossen')."""
+    for j, l in enumerate(block):
+        if SLOTS.match(l):
+            for cand in block[j + 1:j + 3]:
+                if (len(cand) <= 40 and not MONTH.match(cand) and not CAT.match(cand)
+                        and not DATE.search(cand) and not TIME.search(cand)
+                        and not re.match(r"^(‹|›|«|»|Zurück|Weiter|\d+$)", cand)):
+                    return cand
+            break
+    return next((l for l in block if "anmeld" in l.lower()), "")
+
+
 def parse_cards(text, anchors=()):
     """Page text -> list of event dicts. Every card contains one date line; the order of the
     other cells (venue, state, level, spots, status) does not matter."""
@@ -77,7 +90,7 @@ def parse_cards(text, anchors=()):
                 venue, state = locline[: -len(f" - {st}")].strip(), st
         if state is None:                       # state as a cell of its own
             state = next((l for l in block if l in ALL_STATES), None)
-        status = next((l for l in block if l.lower().startswith("anmeldung")), "")
+        status = card_status(block)
         if not (cat and sm and state):
             continue
         dd, mm, yy = map(int, DATE.search(lines[d]).groups())
@@ -137,7 +150,8 @@ def has_free(c):
 
 
 def registration_open(c):
-    return "geschlossen" not in c["status"].lower() and c["status"] != ""
+    """Open unless the button says it is closed (wording of open registrations varies)."""
+    return not any(w in c["status"].lower() for w in ("geschlossen", "beendet", "abgelaufen"))
 
 
 def easter(year):
@@ -345,7 +359,10 @@ def run(page=None, all_cards=None, now=None):
         print("Page looks empty or changed, the script may need a fix.")
         sys.exit(2)
     cards = [c for c in all_cards if matches(c)]
-    print(f"{len(all_cards)} events read, {len(cards)} match the filter.")
+    print(f"{len(all_cards)} events read, {len(cards)} match region/level/type.")
+    from collections import Counter
+    print("Registration texts seen:", dict(Counter(c["status"] or "(none)" for c in cards)))
+    print(f"{sum(1 for c in cards if wanted(c))} pass all rules (open, not full, time).")
     old = load_state()
     forced = os.environ.get("MODE", "").strip().lower() == "report"
     msg = build(cards, old, forced, now)
