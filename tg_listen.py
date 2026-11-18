@@ -31,6 +31,18 @@ URGENT_EVERY_SEC = 270         # start an urgent check when the last run is olde
 URGENT_MAX_HOURS = 48          # urgent mode switches itself off after this
 PAUSE_HOURS = 2
 EVENTS_FILE = "events.txt"
+STATUS_FILE = "status_msg.txt"   # id of the pinned status message
+# GitHub token that cron-job.org uses to start the workflows. Change the date after you renew it.
+TOKEN_EXPIRES = dt.date(2026, 12, 12)
+REMIND_DAYS = (14, 7, 3, 1, 0)   # reminder messages at 09:00 Vienna time, this many days before
+REMINDERS_FILE = "reminders.txt"  # remembers which reminders were already sent
+STATUS_EVERY_MIN = 5             # the status message is refreshed about every 5 minutes
+# (label, workflow file, how old the last success may be before it is shown as a warning)
+WATCHERS = [
+    ("📅 Sun Set events", "watch.yml", 45),
+    ("🎾 Court checks", "courts.yml", None),          # urgent runs: checked separately below
+    ("🏆 Padel-Austria tournaments", "padel_events.yml", 180),
+]
 QUIET_FROM, QUIET_TO = 23, 7   # no automatic urgent checks from 23:00 until 07:00 Vienna time
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -62,6 +74,7 @@ COMMANDS = {
     "sun set": "events",
     "tournaments": "padel_events",
     "help": "menu",
+    "status": "status",
     "check": "check",
     "urgent": "urgent",
     # earlier phrases keep working
@@ -106,7 +119,7 @@ CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "star
 HELP = (
     "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events.\n"
     "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
-    "You can also type: stop · pause · extend · evenings · main 4 · sun set · help"
+    "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
 )
 
 
@@ -310,6 +323,138 @@ def read_commands():
     return cmds, other
 
 
+# ---- Token reminder -----------------------------------------------------------
+def check_token_reminder():
+    """At 09:00 Vienna time, 14 / 7 / 3 / 1 days before the token expires (and on the day) send one reminder."""
+    now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
+    left = (TOKEN_EXPIRES - now.date()).days
+    if now.hour != 9 or left not in REMIND_DAYS:
+        return
+    tag = f"token-{TOKEN_EXPIRES.isoformat()}:{left}"
+    try:
+        done = open(REMINDERS_FILE, encoding="utf-8").read().split()
+    except OSError:
+        done = []
+    if tag in done:
+        return
+    when = "TODAY" if left == 0 else ("tomorrow" if left == 1 else f"in {left} days")
+    say(f"🔑 Reminder: the GitHub token that cron-job.org uses expires {when} ({TOKEN_EXPIRES:%a %d.%m.%Y}). "
+        "After that, Sun Set alerts and urgent checks stop.\n\n"
+        "To renew: GitHub → Settings → Developer settings → Fine-grained tokens → Regenerate. "
+        "Then paste the new token into the Authorization header of each cron-job.org job "
+        "(\"Bearer <token>\"). Never paste the token into this chat. "
+        "Afterwards change TOKEN_EXPIRES in tg_listen.py to the new date.")
+    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+        f.write("\n".join(done + [tag]) + "\n")
+    commit_files("Token reminder sent", add=[REMINDERS_FILE])
+
+
+# ---- Pinned status message ---------------------------------------------------
+def run_times(workflow):
+    """(time of the last successful run, last finished run was a failure?) from the GitHub API."""
+    runs = gh(f"actions/workflows/{workflow}/runs?per_page=8").get("workflow_runs", [])
+    done = [r for r in runs if r.get("status") == "completed"]
+    ok = next((r for r in done if r.get("conclusion") == "success"), None)
+    t = dt.datetime.fromisoformat(ok["updated_at"].replace("Z", "+00:00")) if ok else None
+    failed = bool(done) and done[0].get("conclusion") not in ("success", "cancelled", "skipped")
+    return t, failed
+
+
+def stamp(t, now=None):
+    """Always day, date and time in Vienna time, e.g. 'Tue 17.11. 16:29'."""
+    return f"{vienna(t):%a %d.%m. %H:%M}"
+
+
+def ago(t, now):
+    mins = int((now - t).total_seconds() // 60)
+    return "just now" if mins < 1 else (f"{mins} min ago" if mins < 90 else f"{mins // 60} h ago")
+
+
+def build_status():
+    now = dt.datetime.now(dt.timezone.utc)
+    flag = read_flag()
+    lines = ["📌 PADEL WATCH · status", ""]
+    if flag:
+        ends = vienna(flag["since"] + dt.timedelta(hours=URGENT_MAX_HOURS))
+        extra = opts_text(flag["opts"])
+        if flag["pause"] and flag["pause"] > now:
+            lines.append(f"🚨 Urgent: ON, ⏸ paused until {stamp(flag['pause'], now)}")
+        else:
+            lines.append("🚨 Urgent: ON")
+        lines.append(f"   {extra} · ends {ends:%a %d.%m. %H:%M}")
+    else:
+        lines.append("🚨 Urgent: off")
+    hour = vienna(now).hour
+    quiet = hour >= QUIET_FROM or hour < QUIET_TO
+    problems = []
+    for label, workflow, limit in WATCHERS:
+        try:
+            t, failed = run_times(workflow)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"{label}: ❓ could not read ({type(exc).__name__})")
+            continue
+        if workflow == "courts.yml":
+            watching = flag and not quiet and not (flag["pause"] and flag["pause"] > now)
+            limit = 15 if watching else None
+        text = f"{label}: " + (f"last check {stamp(t)}" if t else "no check yet")
+        stale = limit is not None and (t is None or (now - t).total_seconds() / 60 > limit)
+        if failed:
+            text = "❌ " + text + " · last run FAILED"
+            problems.append(label)
+        elif stale:
+            text = "⚠️ " + text + " · no recent check"
+            problems.append(label)
+        else:
+            text = "✅ " + text
+        lines.append(text)
+    left = (TOKEN_EXPIRES - vienna(now).date()).days
+    if left < 0:
+        lines.append(f"❌ 🔑 GitHub token (cron-job.org) EXPIRED on {TOKEN_EXPIRES:%a %d.%m.%Y}")
+        problems.append("token")
+    else:
+        icon = "❌" if left <= 3 else ("⚠️" if left <= 14 else "✅")
+        lines.append(f"{icon} 🔑 GitHub token (cron-job.org) expires {TOKEN_EXPIRES:%a %d.%m.%Y} · {left} days left")
+        if left <= 14:
+            problems.append("token")
+    lines += ["", ("⚠️ Needs a look" if problems else "All watchers look fine")
+              + f" · updated {vienna(now):%H:%M}"]
+    return "\n".join(lines)
+
+
+def update_status(force=False):
+    """Edits the pinned status message (creates + pins it the first time). Never raises."""
+    now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
+    if not force and now.minute % STATUS_EVERY_MIN != 0:
+        return
+    try:
+        text = build_status()
+        mid = None
+        try:
+            mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
+        except (OSError, ValueError):
+            pass
+        if mid:
+            try:
+                tg("editMessageText", chat_id=CHAT, message_id=mid, text=text)
+                return
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
+                if "not modified" in body:
+                    return
+                print(f"WARNING: status message could not be edited (HTTP {exc.code}), creating a new one.")
+        res = tg("sendMessage", chat_id=CHAT, text=text, reply_markup=keyboard())
+        mid = res["result"]["message_id"]
+        try:
+            tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: could not pin the status message ({type(exc).__name__}). Pin it by hand.")
+        with open(STATUS_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{mid}\n")
+        commit_files("Status message id", add=[STATUS_FILE])
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: status update failed ({type(exc).__name__}).")
+
+
 def main():
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
@@ -375,6 +520,9 @@ def main():
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
+            elif cmd == "status":
+                update_status(force=True)
+                say("📌 Status updated. It stays pinned at the top of this chat.")
             elif cmd == "menu":
                 say(HELP)
             elif cmd == "stop":
@@ -425,6 +573,11 @@ def main():
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: urgent upkeep failed ({type(exc).__name__}).")
             failed = True
+    try:
+        check_token_reminder()
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: token reminder failed ({type(exc).__name__}).")
+    update_status(force=bool(cmds))
     if failed:
         sys.exit(1)
 
