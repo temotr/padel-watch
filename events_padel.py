@@ -41,38 +41,57 @@ SLOTS = re.compile(r"^(\d+)\s*/\s*(\d+)(?:\s*\((\d+)\))?$")
 UUID_HREF = re.compile(r"/tournaments/[0-9a-f]{8}-[0-9a-f-]{27,}$|/solo_tournaments/[0-9a-f-]{36}$")
 
 
+ALL_STATES = {"Wien", "Niederösterreich", "Oberösterreich", "Steiermark", "Tirol", "Kärnten",
+              "Salzburg", "Vorarlberg", "Burgenland"}
+MONTH = re.compile(r"^(Januar|Februar|März|April|Mai|Juni|Juli|August|September|Oktober|November|Dezember)\s+\d{4}$")
+
+
+def split_lines(text):
+    # Cells may be separated by newlines, tabs or several spaces: treat all of them as line breaks.
+    return [x.strip() for l in text.splitlines() for x in re.split(r"\t+| {2,}", l) if x.strip()]
+
+
 def parse_cards(text, hrefs=()):
-    """Page text -> list of event dicts (one per tournament card)."""
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    """Page text -> list of event dicts. Every card contains one date line; the order of the
+    other cells (venue, state, level, spots, status) does not matter."""
+    lines = split_lines(text)
+    dates = [i for i, l in enumerate(lines) if DATE.search(l) and not CAT.match(l)]
+    starts = []
+    for d in dates:
+        prev = lines[d - 1] if d >= 1 else ""
+        if d >= 2 and any(prev.endswith(f" - {st}") for st in ALL_STATES):
+            starts.append((d - 2, d))          # title, "Venue - State", date
+        else:
+            starts.append((d - 1, d))          # title, date
     cards = []
-    for k, l in enumerate(lines):
-        m = CAT.match(l)
-        if not m or k + 3 >= len(lines):
+    for n, (t, d) in enumerate(starts):
+        if t < 0:
             continue
-        sm = SLOTS.match(lines[k + 2])
-        if not sm:
-            continue
-        d = k - 1
-        while d >= 0 and not DATE.search(lines[d]):
-            d -= 1
-            if k - d > 8:
-                break
-        if d < 2 or not DATE.search(lines[d]):
+        end = starts[n + 1][0] if n + 1 < len(starts) else len(lines)
+        block = [l for l in lines[d:end] if not MONTH.match(l)]
+        cat = next((CAT.match(l) for l in block if CAT.match(l)), None)
+        sm = next((SLOTS.match(l) for l in block if SLOTS.match(l)), None)
+        state = next((l for l in block if l in ALL_STATES), None)
+        status = next((l for l in block if l.lower().startswith("anmeldung")), "")
+        if not (cat and sm and state):
             continue
         dd, mm, yy = map(int, DATE.search(lines[d]).groups())
-        tm = next((TIME.search(x).group(0) for x in lines[d:k] if TIME.search(x)), "")
+        tm = next((TIME.search(x).group(0) for x in block[:3] if TIME.search(x)), "")
+        skip = {cat.group(0), state, status}
+        venue = next((l for l in block[1:] if l not in skip and not SLOTS.match(l)
+                      and not TIME.search(l) and not DATE.search(l)), "")
         cards.append({
-            "title": lines[d - 2],
+            "title": lines[t],
             "date": dt.date(yy, mm, dd).isoformat(),
             "time": re.sub(r"\s*[-–]\s*", "-", tm),
-            "venue": lines[k - 1],
-            "kind": m.group(1),
-            "level": m.group(2),
-            "state": lines[k + 1],
+            "venue": venue,
+            "kind": cat.group(1),
+            "level": cat.group(2),
+            "state": state,
             "taken": int(sm.group(1)),
             "cap": int(sm.group(2)),
             "wait": int(sm.group(3) or 0),
-            "status": lines[k + 3],
+            "status": status,
             "url": URL,
         })
     unique = list(dict.fromkeys(hrefs))
@@ -94,6 +113,14 @@ def key_of(c):
     return "|".join(x.replace("|", "/") for x in (c["date"], c["time"], c["title"], c["venue"]))
 
 
+def debug_dump(page, text):
+    """Page 1 had no events: show what the browser really got (public page, no secrets)."""
+    print("---- DEBUG: page title:", page.title(), "| url:", page.url, "| text length:", len(text))
+    for i, l in enumerate(split_lines(text)[:70]):
+        print(f"{i:02d}: {l[:140]}")
+    print("---- END DEBUG")
+
+
 def fetch_all(page):
     cards, hrefs = [], []
     for n in range(1, MAX_PAGES + 1):
@@ -103,8 +130,16 @@ def fetch_all(page):
         links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         links = [h for h in links if UUID_HREF.search(h)]
         got = parse_cards(text, links)
+        if not got and n == 1:
+            page.wait_for_timeout(8000)          # the list may load late: look once more
+            text = page.inner_text("body")
+            links = [h for h in page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+                     if UUID_HREF.search(h)]
+            got = parse_cards(text, links)
         print(f"Page {n}: {len(got)} events")
         if not got:
+            if n == 1:
+                debug_dump(page, text)
             break
         cards += got
         time.sleep(1)
