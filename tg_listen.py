@@ -407,18 +407,28 @@ def build_status():
         else:
             text = "✅ " + text
         lines.append(text)
+    lines += ["", ("⚠️ Needs a look" if problems else "All watchers look fine")
+              + f" · updated {vienna(now):%H:%M}", "", "⚙️ GITHUB"]
     left = (TOKEN_EXPIRES - vienna(now).date()).days
     if left < 0:
-        lines.append(f"❌ 🔑 GitHub token (cron-job.org) EXPIRED on {TOKEN_EXPIRES:%a %d.%m.%Y}")
-        problems.append("token")
+        lines.append(f"❌ 🔑 Token for cron-job.org EXPIRED on {TOKEN_EXPIRES:%a %d.%m.%Y}")
     else:
         icon = "❌" if left <= 3 else ("⚠️" if left <= 14 else "✅")
-        lines.append(f"{icon} 🔑 GitHub token (cron-job.org) expires {TOKEN_EXPIRES:%a %d.%m.%Y} · {left} days left")
-        if left <= 14:
-            problems.append("token")
-    lines += ["", ("⚠️ Needs a look" if problems else "All watchers look fine")
-              + f" · updated {vienna(now):%H:%M}"]
+        lines.append(f"{icon} 🔑 Token for cron-job.org expires {TOKEN_EXPIRES:%a %d.%m.%Y} · {left} days left")
+    if REPO:
+        lines.append(f"🔗 https://github.com/{REPO}/actions")
     return "\n".join(lines)
+
+
+def pinned_status_id():
+    """The status message is the one our bot pinned: ask Telegram, no repo file needed."""
+    try:
+        pin = tg("getChat", chat_id=CHAT).get("result", {}).get("pinned_message") or {}
+        if (pin.get("from") or {}).get("is_bot") and str(pin.get("text", "")).startswith("📌 PADEL WATCH"):
+            return int(pin["message_id"])
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not ask Telegram for the pinned message ({type(exc).__name__}).")
+    return None
 
 
 def update_status(force=False):
@@ -428,29 +438,35 @@ def update_status(force=False):
         return
     try:
         text = build_status()
-        mid = None
-        try:
-            mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
-        except (OSError, ValueError):
-            pass
+        mid = pinned_status_id()
+        if not mid:
+            try:
+                mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
+            except (OSError, ValueError):
+                pass
         if mid:
             try:
-                tg("editMessageText", chat_id=CHAT, message_id=mid, text=text)
+                tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
+                   disable_web_page_preview="true")
                 return
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
                 if "not modified" in body:
                     return
                 print(f"WARNING: status message could not be edited (HTTP {exc.code}), creating a new one.")
-        res = tg("sendMessage", chat_id=CHAT, text=text, reply_markup=keyboard())
+        res = tg("sendMessage", chat_id=CHAT, text=text, reply_markup=keyboard(),
+                 disable_web_page_preview="true")
         mid = res["result"]["message_id"]
         try:
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: could not pin the status message ({type(exc).__name__}). Pin it by hand.")
-        with open(STATUS_FILE, "w", encoding="utf-8") as f:
-            f.write(f"{mid}\n")
-        commit_files("Status message id", add=[STATUS_FILE])
+        try:   # only a backup: Telegram itself tells us which message is pinned
+            with open(STATUS_FILE, "w", encoding="utf-8") as f:
+                f.write(f"{mid}\n")
+            commit_files("Status message id", add=[STATUS_FILE])
+        except Exception as exc:  # noqa: BLE001
+            print(f"WARNING: could not save the status message id ({type(exc).__name__}).")
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: status update failed ({type(exc).__name__}).")
 
