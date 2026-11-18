@@ -3,7 +3,7 @@
 Keeps only events that match ALL of:
   - Bundesland: Wien
   - Level:      Starter
-  - Wettbewerb: Offener Bewerb or Herren
+  - Wettbewerb: Offener Bewerb (Herren is excluded)
 Only events that are NOT full are reported (registered < capacity; the number in brackets is the waiting list).
 Sends a Telegram message for new events with free spots and when a full event gets a free spot.
 MODE=report (button "Padel Austria events") sends the whole list of matching events now.
@@ -25,11 +25,11 @@ STATE_HEADER = "# v1"
 
 STATES = {"Wien"}
 LEVELS = {"Starter"}
-KINDS = {"Offener Bewerb", "Herren"}
+KINDS = {"Offener Bewerb"}
 CONDITION_LINES = [
     "📍 Region: Wien",
     "🎚 Level: Starter",
-    "🏁 Type: Offener Bewerb or Herren",
+    "🏁 Type: Offener Bewerb",
     "✅ Only events that are not full",
 ]
 
@@ -115,9 +115,21 @@ def key_of(c):
 
 def debug_dump(page, text):
     """Page 1 had no events: show what the browser really got (public page, no secrets)."""
-    print("---- DEBUG: page title:", page.title(), "| url:", page.url, "| text length:", len(text))
-    for i, l in enumerate(split_lines(text)[:70]):
-        print(f"{i:02d}: {l[:140]}")
+    lines = split_lines(text)
+    date_idx = [i for i, l in enumerate(lines) if DATE.search(l)]
+    print("---- DEBUG v2: title:", page.title(), "| text length:", len(text),
+          "| lines:", len(lines), "| lines with a dd.mm.yyyy date:", len(date_idx))
+    if date_idx:
+        lo = max(0, date_idx[0] - 4)
+        print(f"-- lines {lo}..{lo + 45} (around the first date)")
+        for i in range(lo, min(len(lines), lo + 45)):
+            print(f"{i:03d}: {lines[i][:140]}")
+    else:
+        print("-- no date found. Last 50 lines:")
+        for i in range(max(0, len(lines) - 50), len(lines)):
+            print(f"{i:03d}: {lines[i][:140]}")
+        print("-- cards present in the HTML? 'Anmeldung' count:",
+              page.content().count("Anmeldung"), "| html length:", len(page.content()))
     print("---- END DEBUG")
 
 
