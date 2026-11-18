@@ -356,6 +356,11 @@ def run_times(workflow):
     done = [r for r in runs if r.get("status") == "completed"]
     ok = next((r for r in done if r.get("conclusion") == "success"), None)
     t = dt.datetime.fromisoformat(ok["updated_at"].replace("Z", "+00:00")) if ok else None
+    running = next((r for r in runs if r.get("status") == "in_progress"), None)   # a check that has just started counts too
+    if running and running.get("run_started_at"):
+        started = dt.datetime.fromisoformat(running["run_started_at"].replace("Z", "+00:00"))
+        if t is None or started > t:
+            t = started
     failed = bool(done) and done[0].get("conclusion") not in ("success", "cancelled", "skipped")
     return t, failed
 
@@ -407,8 +412,7 @@ def build_status():
         else:
             text = "✅ " + text
         lines.append(text)
-    lines += ["", ("⚠️ Needs a look" if problems else "All watchers look fine")
-              + f" · updated {vienna(now):%H:%M}", "", "⚙️ GITHUB"]
+    lines += ["", "⚙️ GITHUB"]   # a failing watcher is marked on its own line (❌ / ⚠️), no summary line needed
     left = (TOKEN_EXPIRES - vienna(now).date()).days
     if left < 0:
         lines.append(f"❌ 🔑 Token for cron-job.org EXPIRED on {TOKEN_EXPIRES:%a %d.%m.%Y}")
@@ -513,7 +517,7 @@ def update_status(force=False, create=False):
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v5 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
+    print(f"tg_listen v8 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
         sys.exit(3)
