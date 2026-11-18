@@ -423,9 +423,13 @@ def build_status():
 def pinned_status_id():
     """The status message is the one our bot pinned: ask Telegram, no repo file needed."""
     try:
-        pin = tg("getChat", chat_id=CHAT).get("result", {}).get("pinned_message") or {}
-        if (pin.get("from") or {}).get("is_bot") and str(pin.get("text", "")).startswith("📌 PADEL WATCH"):
+        chat = tg("getChat", chat_id=CHAT).get("result", {})
+        pin = chat.get("pinned_message") or {}
+        text = str(pin.get("text", ""))
+        if pin and text.startswith("📌 PADEL WATCH"):
             return int(pin["message_id"])
+        print(f"STATUS: getChat gave pinned_message={'yes' if pin else 'no'}, "
+              f"text starts with {text[:20]!r}, from={pin.get('from')}")
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: could not ask Telegram for the pinned message ({type(exc).__name__}).")
     return None
@@ -451,7 +455,7 @@ def update_status(force=False, create=False):
     """Edits the pinned status message. It is created ONLY when create=True (you typed 'status').
     Automatic runs never create a message, so they can never spam the chat. Never raises."""
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    if not force and now.minute % STATUS_EVERY_MIN != 0:
+    if not force and now.minute % STATUS_EVERY_MIN > 1:   # minutes :00/:01, :05/:06 ... (runs can be late)
         return
     try:
         text = build_status()
