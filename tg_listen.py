@@ -456,6 +456,7 @@ def update_status(force=False, create=False):
     Automatic runs never create a message, so they can never spam the chat. Never raises."""
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
     if not force and now.minute % STATUS_EVERY_MIN > 1:   # minutes :00/:01, :05/:06 ... (runs can be late)
+        print("STATUS: not due this minute.")
         return
     try:
         text = build_status()
@@ -492,8 +493,9 @@ def update_status(force=False, create=False):
             except (urllib.error.URLError, OSError) as exc:
                 print(f"STATUS: edit of message {mid} failed ({type(exc).__name__}), will retry next time.")
                 return
-        res = tg("sendMessage", chat_id=CHAT, text=text, reply_markup=keyboard(),
-                 disable_web_page_preview="true")
+        # No reply_markup here: Telegram refuses to edit a message that was sent with a button keyboard.
+        # The buttons stay on screen from the other bot messages.
+        res = tg("sendMessage", chat_id=CHAT, text=text, disable_web_page_preview="true")
         mid = res["result"]["message_id"]
         try:
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
@@ -510,6 +512,8 @@ def update_status(force=False, create=False):
 
 
 def main():
+    _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
+    print(f"tg_listen v5 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
         sys.exit(3)
