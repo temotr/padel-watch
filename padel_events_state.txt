@@ -1,0 +1,35 @@
+# v1
+2026-11-18|19:00-23:00|EUROPAHALLE: AFTERWORK CUP – STARTER|Europahalle|0
+2026-11-20|20:00-22:45|Turbo-Turnier Starter 🚅⚡|The Dome|0
+2026-11-21|12:00-17:00|PADELZONE Saturday Day Time Turnier 🎾 by MaxiNutrition|PADELZONE Wien / Vienna Sporthotel|0
+2026-11-21|18:00-23:00|Padeldome Alterlaa Night Circuit – NEWCOMER 🥎|PADELDOME Alterlaa|0
+2026-11-22|16:00-21:00|PD Süßenbrunn NEWCOMER OPEN SPECIAL|PADELDOME Süßenbrunn|1
+2026-11-24|18:30-23:00|PD Süßenbrunn AFTERWORK STA|PADELDOME Süßenbrunn|1
+2026-11-24|20:00-22:45|Turbo-Turnier Newcomer 🚅⚡|The Dome|0
+2026-11-26|09:00-14:00|Padeldome Alterlaa Breakfast Club STARTER 🥐☕ 🍭|PADELDOME Alterlaa|0
+2026-11-27|18:00-22:00|Padeldome Alte Donau Friday STARTER- INDOOR|PADELDOME Alte Donau|0
+2026-11-27|20:00-22:45|Turbo-Turnier Starter 🚅⚡|The Dome|0
+2026-12-01|09:30-14:30|Padeldome Breakfast Club - das ORIGINAL 🥐☕ 🍭|PADELDOME Erdberg|0
+2026-12-01|18:30-23:00|PD Süßenbrunn AFTERWORK - STARTER|PADELDOME Süßenbrunn|0
+2026-12-01|19:00-23:00|EUROPAHALLE: AFTERWORK CUP – STARTER|Europahalle|0
+2026-12-01|20:00-22:45|Turbo-Turnier Newcomer 🚅⚡|The Dome|1
+2026-12-04|18:00-22:00|Padeldome Alte Donau Friday NEWCOMER - INDOOR|PADELDOME Alte Donau|1
+2026-12-04|20:00-22:45|Turbo-Turnier Starter 🚅⚡|The Dome|0
+2026-12-05|10:00-15:00|PD Süßenbrunn NEWCOMER|PADELDOME Süßenbrunn|1
+2026-12-05|18:00-23:00|Padeldome Alterlaa Night Circuit – STARTER 🥎|PADELDOME Alterlaa|0
+2026-12-08|18:00-20:45|Turbo-Turnier Newcomer 🚅⚡|The Dome|1
+2026-12-08|18:30-23:00|PD Süßenbrunn AFTERWORK - STARTER|PADELDOME Süßenbrunn|1
+2026-12-09|18:30-23:30|PD Süßenbrunn Afterwork - Newcomer|PADELDOME Süßenbrunn|1
+2026-12-11|18:00-22:30|💥Racketworld Night Circuit Starter *MASTERS* powered by HEAD|Racketworld Ottakring|1
+2026-12-11|20:00-22:45|Turbo-Turnier Starter 🚅⚡|The Dome|0
+2026-12-12|16:30-22:30|PD - SATURDAY NIGHT CIRCUIT- STARTER|PADELDOME Süßenbrunn|1
+2026-12-15|09:30-14:30|Padeldome Breakfast Club - das ORIGINAL 🥐☕ 🍭|PADELDOME Erdberg|1
+2026-12-15|18:30-23:00|PD Süßenbrunn AFTERWORK STARTER|PADELDOME Süßenbrunn|1
+2026-12-15|20:00-22:45|Turbo-Turnier Newcomer 🚅⚡|The Dome|1
+2026-12-16|09:00-14:00|smash Leopoldau / Frühschicht / Starter 🎾💚|smash / Leopoldau|1
+2026-12-16|18:30-23:30|PD Süßenbrunn Afterwork - STARTER|PADELDOME Süßenbrunn|1
+2026-12-16|19:00-23:00|EUROPAHALLE: AFTERWORK CUP – STARTER|Europahalle|0
+2026-12-18|19:00-23:00|💥Racketworld Night Circuit NEWCOMER|Racketworld Ottakring|1
+2026-12-18|20:00-22:45|Turbo-Turnier Starter 🚅⚡|The Dome|1
+2026-12-22|09:30-14:30|Padeldome Breakfast Club - das ORIGINAL 🥐☕ 🍭|PADELDOME Erdberg|1
+2027-01-08|14:00-18:00|🔥 PADEL - WAHNSINN SÜSSENBRUNN 🔥 STARTER|PADELDOME Süßenbrunn|1
