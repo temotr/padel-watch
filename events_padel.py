@@ -4,8 +4,9 @@ Keeps only events that match ALL of:
   - Bundesland: Wien
   - Level:      Starter
   - Wettbewerb: Offener Bewerb (Herren is excluded)
-Only events that are NOT full are reported (registered < capacity; the number in brackets is the waiting list).
-Sends a Telegram message for new events with free spots and when a full event gets a free spot.
+Only tournaments with OPEN registration that are NOT full are reported (registered < capacity;
+the number in brackets is the waiting list). Mon-Fri only from 18:00; weekends and public holidays any time.
+Sends a Telegram message for new such tournaments and when a tournament becomes open / gets a free spot.
 MODE=report (button "Padel Austria events") sends the whole list of matching events now.
 """
 import datetime as dt
@@ -16,28 +17,28 @@ import sys
 import time
 
 import courts
-from courts import TZ, WEEKDAY_NAMES, bold, heading, link, notify
+from courts import BQ_OFF, BQ_ON, IT_OFF, IT_ON, TZ, WEEKDAY_NAMES, bold, heading, link, notify
 
 URL = "https://padel-austria.at/tournaments"
 MAX_PAGES = 12
 STATE = pathlib.Path("padel_events_state.txt")
-STATE_HEADER = "# v1"
+STATE_HEADER = "# v2"
 
 STATES = {"Wien"}
 LEVELS = {"Starter"}
 KINDS = {"Offener Bewerb"}
 CONDITION_LINES = [
-    "📍 Region: Wien",
-    "🎚 Level: Starter",
-    "🏁 Type: Offener Bewerb",
-    "✅ Only events that are not full",
+    "📍 Region: Wien  ·  🎚 Level: Starter  ·  🏁 Type: Offener Bewerb",
+    "🔓 Only open registrations that are not full",
+    "🕕 Mon-Fri: start from 18:00  ·  🌴 weekends and public holidays: any time",
 ]
 
 CAT = re.compile(r"^(Offener Bewerb|Herren|Damen|Mixed|Jugend)\s*-\s*([A-Za-zÄÖÜäöüß]+)$")
 DATE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 TIME = re.compile(r"\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}")
 SLOTS = re.compile(r"^(\d+)\s*/\s*(\d+)(?:\s*\((\d+)\))?$")
-UUID_HREF = re.compile(r"/tournaments/[0-9a-f]{8}-[0-9a-f-]{27,}$|/solo_tournaments/[0-9a-f-]{36}$")
+UUID_HREF = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+EVENING_FROM = 18 * 60       # Mon-Fri: only tournaments starting at 18:00 or later
 
 
 ALL_STATES = {"Wien", "Niederösterreich", "Oberösterreich", "Steiermark", "Tirol", "Kärnten",
@@ -50,7 +51,7 @@ def split_lines(text):
     return [x.strip() for l in text.splitlines() for x in re.split(r"\t+| {2,}", l) if x.strip()]
 
 
-def parse_cards(text, hrefs=()):
+def parse_cards(text, anchors=()):
     """Page text -> list of event dicts. Every card contains one date line; the order of the
     other cells (venue, state, level, spots, status) does not matter."""
     lines = split_lines(text)
@@ -99,11 +100,32 @@ def parse_cards(text, hrefs=()):
             "status": status,
             "url": URL,
         })
-    unique = list(dict.fromkeys(hrefs))
-    if cards and len(unique) == len(cards):
+    attach_links(cards, anchors)
+    return cards
+
+
+def attach_links(cards, anchors):
+    """anchors: [(href, text)] of the page. Give every card the link of ITS tournament."""
+    anchors = [(h, t) for h, t in anchors if UUID_HREF.search(h)]
+    unique = list(dict.fromkeys(h for h, _ in anchors))
+    if cards and len(unique) == len(cards):          # one link per card, same order
         for c, h in zip(cards, unique):
             c["url"] = h
-    return cards
+        return
+    # otherwise match by title; equal titles are matched in page order
+    by_title = {}
+    for h, t in anchors:
+        for line in split_lines(t):
+            seen = by_title.setdefault(line, [])
+            if h not in seen:
+                seen.append(h)
+    used = {}
+    for c in cards:
+        hs = by_title.get(c["title"], [])
+        i = used.get(c["title"], 0)
+        if i < len(hs):
+            c["url"] = hs[i]
+            used[c["title"]] = i + 1
 
 
 def matches(c):
@@ -112,6 +134,55 @@ def matches(c):
 
 def has_free(c):
     return c["taken"] < c["cap"]
+
+
+def registration_open(c):
+    return "geschlossen" not in c["status"].lower() and c["status"] != ""
+
+
+def easter(year):
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return dt.date(year, month, day)
+
+
+def holiday_name(d):
+    """Austrian public holiday (Feiertag) of this date, or None."""
+    fixed = {(1, 1): "Neujahr", (1, 6): "Heilige Drei Könige", (5, 1): "Staatsfeiertag",
+             (8, 15): "Mariä Himmelfahrt", (10, 26): "Nationalfeiertag", (11, 1): "Allerheiligen",
+             (12, 8): "Mariä Empfängnis", (12, 25): "Christtag", (12, 26): "Stefanitag"}
+    if (d.month, d.day) in fixed:
+        return fixed[(d.month, d.day)]
+    e = easter(d.year)
+    moving = {1: "Ostermontag", 39: "Christi Himmelfahrt", 50: "Pfingstmontag", 60: "Fronleichnam"}
+    delta = (d - e).days
+    return moving.get(delta)
+
+
+def start_minutes(c):
+    m = re.match(r"(\d{1,2}):(\d{2})", c["time"])
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else 0
+
+
+def day_ok(c):
+    """Mon-Fri only from 18:00; weekends and public holidays any time."""
+    d = dt.date.fromisoformat(c["date"])
+    if d.weekday() >= 5 or holiday_name(d):
+        return True
+    return start_minutes(c) >= EVENING_FROM
+
+
+def wanted(c):
+    """Open registration, not full, and at a time that suits you."""
+    return registration_open(c) and has_free(c) and day_ok(c)
 
 
 def key_of(c):
@@ -144,14 +215,12 @@ def fetch_all(page):
         page.goto(f"{URL}?page={n}", wait_until="networkidle")
         page.wait_for_timeout(1500)
         text = page.inner_text("body")
-        links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        links = [h for h in links if UUID_HREF.search(h)]
+        links = page.eval_on_selector_all("a[href]", "els => els.map(e => [e.href, e.innerText])")
         got = parse_cards(text, links)
         if not got and n == 1:
             page.wait_for_timeout(8000)          # the list may load late: look once more
             text = page.inner_text("body")
-            links = [h for h in page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-                     if UUID_HREF.search(h)]
+            links = page.eval_on_selector_all("a[href]", "els => els.map(e => [e.href, e.innerText])")
             got = parse_cards(text, links)
         print(f"Page {n}: {len(got)} events")
         if not got:
@@ -178,60 +247,95 @@ def load_state():
 
 
 def save_state(cards):
-    out = [STATE_HEADER] + [f"{key_of(c)}|{1 if has_free(c) else 0}" for c in cards]
+    out = [STATE_HEADER] + [f"{key_of(c)}|{1 if wanted(c) else 0}" for c in cards]
     STATE.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def event_block(c, mark="🏆"):
+def spots_icon(free):
+    return "🟢" if free >= 5 else ("🟡" if free >= 2 else "🔴")
+
+
+def event_block(c, mark=""):
+    """One tournament as a quote block (4 lines). Title and location both open this tournament."""
     free = c["cap"] - c["taken"]
     spots = f"{free} spot free" if free == 1 else f"{free} spots free"
-    reg = "🔓 registration open" if "geschlossen" not in c["status"].lower() else "🔒 registration closed"
-    return [f"{mark} ⏰ {c['time']} · {link(c['title'], c['url'])}",
-            f"      📍 {c['venue']} · {c['kind']}",
-            f"      👥 {c['taken']}/{c['cap']} · {spots} · {reg}"]
+    wait = f"⏳ waiting list: {c['wait']}" if c["wait"] else "⏳ no waiting list"
+    return "\n".join([
+        BQ_ON + f"{spots_icon(free)} {mark}{bold('⏰ ' + c['time'])}",
+        f"🏆 {IT_ON}{link(c['title'], c['url'])}{IT_OFF}",
+        f"📍 {bold(link(c['venue'], c['url']))} · {c['kind']}",
+        f"👥 {bold(str(c['taken']) + '/' + str(c['cap']))} · {spots} · {wait}" + BQ_OFF,
+    ])
 
 
-def day_groups(cards, mark):
-    lines, current = [], None
+def day_groups(cards, mark=""):
+    """List of strings, one per day: bold date line + one quote block per tournament."""
+    out, current, buf = [], None, []
+
+    def flush():
+        if buf:
+            out.append("\n".join(buf))
+
     for c in sorted(cards, key=lambda x: (x["date"], x["time"])):
         if c["date"] != current:
+            flush()
             current = c["date"]
             d = dt.date.fromisoformat(current)
-            if lines:
-                lines.append("")
-            lines.append(bold(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}"))
-        lines += event_block(c, mark)
-    return lines
+            tag = ""
+            hol = holiday_name(d)
+            if hol:
+                tag = f"  ·  🎉 {hol}"
+            elif d.weekday() >= 5:
+                tag = "  ·  🌴 weekend"
+            buf = [bold(f"📅 {WEEKDAY_NAMES[d.weekday()]} {d:%d-%m-%Y}") + tag]
+        buf.append(event_block(c, mark))
+    flush()
+    return out
+
+
+MAX_MESSAGE = 3300      # Telegram allows 4096 characters; long lists are sent in several messages
+
+
+def pack(units):
+    """Join units with blank lines into messages that are not too long."""
+    messages, cur = [], ""
+    for u in units:
+        if cur and len(cur) + 2 + len(u) > MAX_MESSAGE:
+            messages.append(cur)
+            cur = u
+        else:
+            cur = f"{cur}\n\n{u}" if cur else u
+    if cur:
+        messages.append(cur)
+    return messages
 
 
 def build(cards, old, forced, now):
-    """cards: all events of Wien / Starter / Offener Bewerb or Herren (full or not)."""
-    free = [c for c in cards if has_free(c)]
+    """cards: all Wien / Starter / Offener Bewerb tournaments. Returns (title, [messages]) or None."""
+    good = [c for c in cards if wanted(c)]
     first = old is None
-    new = [c for c in free if not first and key_of(c) not in old]
-    freed = [c for c in free if not first and key_of(c) in old and not old[key_of(c)]]
-    if not (first or forced or new or freed):
+    new = [c for c in good if not first and key_of(c) not in old]
+    opened = [c for c in good if not first and key_of(c) in old and not old[key_of(c)]]
+    if not (first or forced or new or opened):
         return None
-    sections = ["\n".join([f"🕒 Execution time of the agent: {now:%d.%m.%Y %H:%M}"]),
-                "\n".join([heading("📋 CONDITIONS"), ""] + CONDITION_LINES)]
+    units = [f"🕒 Execution time of the agent: {now:%d.%m.%Y %H:%M}",
+             "\n".join([heading("📋 CONDITIONS"), ""] + CONDITION_LINES)]
     if new:
-        sections.append("\n".join([heading("🆕 NEW EVENTS WITH FREE SPOTS"), ""] + day_groups(new, "🆕")))
-    if freed:
-        sections.append("\n".join([heading("🔓 SPOT FREED IN A FULL EVENT"), ""] + day_groups(freed, "🔓")))
+        units += [heading("🆕 NEW TOURNAMENTS (OPEN)")] + day_groups(new, "🆕 ")
+    if opened:
+        units += [heading("🔓 NOW OPEN / SPOT FREE")] + day_groups(opened, "🔓 ")
     if first or forced:
-        if free:
-            sections.append("\n".join([heading("🏆 ALL EVENTS WITH FREE SPOTS"), ""] + day_groups(free, "🏆")))
-        else:
-            sections.append("\n".join([heading("🏆 ALL EVENTS WITH FREE SPOTS"), "", "No matching event has a free spot right now."]))
-    sections.append(f"🔎 {len(cards)} matching events read, {len(free)} not full")
+        units.append(heading(f"🏆 ALL OPEN TOURNAMENTS ({len(good)})"))
+        units += day_groups(good) if good else ["No tournament matches right now."]
+    units.append(f"🔎 {len(cards)} Wien / Starter / Offener Bewerb tournaments read, {len(good)} match your rules")
     if first:
         title = "Padel-Austria tournaments watcher started"
-    elif forced and not (new or freed):
+    elif forced and not (new or opened):
         title = "Padel-Austria tournaments (on request)"
     else:
-        n = len(new) + len(freed)
-        title = f"Padel-Austria: {n} event" + ("s" if n > 1 else "") + " with free spots"
-    return title, "\n\n".join(sections)
+        n = len(new) + len(opened)
+        title = f"Padel-Austria: {n} open tournament" + ("s" if n > 1 else "")
+    return title, pack(units)
 
 
 def run(page=None, all_cards=None, now=None):
@@ -246,7 +350,10 @@ def run(page=None, all_cards=None, now=None):
     forced = os.environ.get("MODE", "").strip().lower() == "report"
     msg = build(cards, old, forced, now)
     if msg:
-        notify(msg[0], msg[1], URL)
+        title, parts = msg
+        for i, part in enumerate(parts):
+            notify(title if i == 0 else f"{title} ({i + 1}/{len(parts)})", part, URL)
+            time.sleep(1)
     save_state(cards)
 
 
