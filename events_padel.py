@@ -33,8 +33,7 @@ CONDITION_LINES = [
     "✅ Only events that are not full",
 ]
 
-CAT = re.compile(r"^(Offener Bewerb|Herren|Damen|Mixed|Jugend)\s*-\s*"
-                 r"(Starter|Advanced|Expert|Professional|Elite|Masters)$")
+CAT = re.compile(r"^(Offener Bewerb|Herren|Damen|Mixed|Jugend)\s*-\s*([A-Za-zÄÖÜäöüß]+)$")
 DATE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 TIME = re.compile(r"\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}")
 SLOTS = re.compile(r"^(\d+)\s*/\s*(\d+)(?:\s*\((\d+)\))?$")
@@ -60,26 +59,32 @@ def parse_cards(text, hrefs=()):
     for d in dates:
         prev = lines[d - 1] if d >= 1 else ""
         if d >= 2 and any(prev.endswith(f" - {st}") for st in ALL_STATES):
-            starts.append((d - 2, d))          # title, "Venue - State", date
+            starts.append((d - 2, d, prev))    # title, "Venue - State", date
         else:
-            starts.append((d - 1, d))          # title, date
+            starts.append((d - 1, d, ""))      # title, date
     cards = []
-    for n, (t, d) in enumerate(starts):
+    for n, (t, d, locline) in enumerate(starts):
         if t < 0:
             continue
         end = starts[n + 1][0] if n + 1 < len(starts) else len(lines)
         block = [l for l in lines[d:end] if not MONTH.match(l)]
         cat = next((CAT.match(l) for l in block if CAT.match(l)), None)
         sm = next((SLOTS.match(l) for l in block if SLOTS.match(l)), None)
-        state = next((l for l in block if l in ALL_STATES), None)
+        venue, state = "", None
+        for st in ALL_STATES:                   # "PADELDOME Süßenbrunn - Wien"
+            if locline.endswith(f" - {st}"):
+                venue, state = locline[: -len(f" - {st}")].strip(), st
+        if state is None:                       # state as a cell of its own
+            state = next((l for l in block if l in ALL_STATES), None)
         status = next((l for l in block if l.lower().startswith("anmeldung")), "")
         if not (cat and sm and state):
             continue
         dd, mm, yy = map(int, DATE.search(lines[d]).groups())
         tm = next((TIME.search(x).group(0) for x in block[:3] if TIME.search(x)), "")
         skip = {cat.group(0), state, status}
-        venue = next((l for l in block[1:] if l not in skip and not SLOTS.match(l)
-                      and not TIME.search(l) and not DATE.search(l)), "")
+        if not venue:
+            venue = next((l for l in block[1:] if l not in skip and not SLOTS.match(l)
+                          and not TIME.search(l) and not DATE.search(l)), "")
         cards.append({
             "title": lines[t],
             "date": dt.date(yy, mm, dd).isoformat(),
