@@ -111,6 +111,12 @@ token_expires = "2026-12-12"  # GitHub token for cron-job.org: change this date 
 remind_days = [14, 7, 3, 1, 0]   # reminders at 09:00 this many days before
 mute_hours = [2, 8, 24, 72, 168] # choices in the Mute menu (hours)
 
+[bot.cadence]                 # text in brackets in the status (change it when you change the cron-job.org schedule)
+"watch.yml" = "every 5 min"
+"courts.yml" = "on request + urgent"
+"padel_events.yml" = "hourly"
+urgent = "checked every 5 min"
+
 # ------------------------------------------------------------------------------------------
 [sunset]                      # Sun Set events (every 5 minutes)
 url = "https://sunsetpadel.at/events"
