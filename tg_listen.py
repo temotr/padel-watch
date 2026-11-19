@@ -33,6 +33,7 @@ LISTEN_SECONDS = int(os.environ.get("LISTEN_SECONDS", "50"))   # how long one ru
 MAX_AGE_SEC = 30 * 60          # ignore Telegram messages older than this
 # Settings come from config.toml (the numbers here are only the fallback)
 URGENT_EVERY_SEC = W.get("urgent", "every_sec", 270)   # start an urgent check when the last run is older than this
+URGENT_BACKOFF_SEC = W.get("urgent", "backoff_sec", 900)   # after a FAILED check, wait this long (a website that does not answer is not hammered)
 URGENT_MAX_HOURS = W.get("urgent", "max_hours", 48)     # urgent mode switches itself off after this
 PAUSE_HOURS = W.get("urgent", "pause_hours", 2)
 EVENTS_FILE = "events.txt"
@@ -1081,8 +1082,10 @@ def process(cmds, other):
                 run = last_run()
                 busy = run and run.get("status") in ("queued", "in_progress", "waiting", "pending")
                 created = run and dt.datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                failed_last = bool(run) and run.get("conclusion") == "failure"
                 due = (not run) or (
-                    (dt.datetime.now(dt.timezone.utc) - created).total_seconds() >= URGENT_EVERY_SEC
+                    (dt.datetime.now(dt.timezone.utc) - created).total_seconds()
+                    >= (URGENT_BACKOFF_SEC if failed_last else URGENT_EVERY_SEC)
                 )
                 hour = dt.datetime.now(ZoneInfo("Europe/Vienna")).hour
                 quiet = hour >= QUIET_FROM or hour < QUIET_TO
