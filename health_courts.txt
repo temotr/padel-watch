@@ -1,1 +1,1 @@
-fails=5 | since=2026-11-19T16:31:10+00:00 | warned=1 | detail=the website did not answer (timeouts), no layout problem seen
+fails=6 | since=2026-11-19T16:31:10+00:00 | warned=1 | detail=the website did not answer (timeouts), no layout problem seen
