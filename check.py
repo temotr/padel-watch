@@ -5,7 +5,9 @@ import re
 import sys
 from zoneinfo import ZoneInfo
 
-URL = "https://sunsetpadel.at/events"
+import watchlib as W
+
+URL = W.get("sunset", "url", "https://sunsetpadel.at/events")   # settings: config.toml
 SNAP = pathlib.Path("events.txt")
 TZ = ZoneInfo("Europe/Vienna")
 
@@ -133,30 +135,47 @@ def build_changes(events, old, now=None):
     return title, message
 
 
-def main():
+def read_page():
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page()
-        # Skip images, fonts and videos: we only need the text, and this
-        # keeps the load on the website small.
-        page.route(
-            "**/*",
-            lambda route: route.abort()
-            if route.request.resource_type in ("image", "font", "media")
-            else route.continue_(),
-        )
-        page.goto(URL, wait_until="networkidle")
-        page.wait_for_timeout(3000)
-        text = page.inner_text("body")
-        browser.close()
+        try:
+            page = browser.new_page()
+            # Skip images, fonts and videos: we only need the text, and this
+            # keeps the load on the website small.
+            page.route(
+                "**/*",
+                lambda route: route.abort()
+                if route.request.resource_type in ("image", "font", "media")
+                else route.continue_(),
+            )
+            page.goto(URL, wait_until="networkidle")
+            page.wait_for_timeout(3000)
+            return page.inner_text("body")
+        finally:
+            browser.close()
+
+
+def main():
+    until = W.muted("sunset")
+    if until:   # muted from the Telegram menu: nothing is checked or saved, so you get the news after the mute
+        print(f"Muted until {until.astimezone(TZ):%a %d.%m. %H:%M} Vienna time. Nothing checked.")
+        set_output("changed", "false")
+        return
+    try:
+        text = read_page()
+    except Exception as exc:  # noqa: BLE001
+        W.health_report("sunset", False, f"{type(exc).__name__}: {str(exc)[:80]}")
+        raise
 
     events = parse_events(text)
     if events is None:
-        # Fail loudly (you get an email) if the page looks broken.
+        # Fail loudly (a failed run is marked in the status message) if the page looks broken.
         print("Page looks empty or changed, the script may need a fix.")
+        W.health_report("sunset", False, "no events found on the page")
         sys.exit(2)
+    W.health_report("sunset", True)
 
     old = load_old()
     out = []

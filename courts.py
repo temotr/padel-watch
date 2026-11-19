@@ -18,54 +18,53 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
-# ---- Settings you may want to change -------------------------------------
+# ---- Settings: they live in config.toml (the values below are only the fallback) --------
+import watchlib as W
+
 BASE = "https://www.padeldome.wien/reservierung"
-LOCATIONS = [  # (id from the link ?c=..., name shown in the notification)
-    ("5175", "The Dome Stadlau"),
-    ("2665", "Padeldome Erdberg"),
-    ("2667", "Padeldome Süßenbrunn"),
-    ("3216", "Padeldome Alte Donau"),
+_D_LOC = [  # id from the link ?c=..., name shown in the notification, postcode (= district)
+    {"id": "5175", "name": "The Dome Stadlau", "postcode": "1220"},
+    {"id": "2665", "name": "Padeldome Erdberg", "postcode": "1030"},
+    {"id": "2667", "name": "Padeldome Süßenbrunn", "postcode": "1220"},
+    {"id": "3216", "name": "Padeldome Alte Donau", "postcode": "1210"},
 ]
-FAR_LOCATIONS = [  # alternative locations: shown at the end, never start an alert on their own
-    ("2668", "Padeldome Alterlaa"),
-    ("3660", "Racketworld"),
-    ("4797", "Europahalle"),
-    ("4858", "Playpadel Gänserndorf"),
+_D_FAR = [  # alternative locations: shown at the end, never start an alert on their own
+    {"id": "2668", "name": "Padeldome Alterlaa", "postcode": "1230"},
+    {"id": "3660", "name": "Racketworld", "postcode": "1160",
+     "site": "https://www.racketworld.wien/reservierung", "date_param": "t"},
+    {"id": "4797", "name": "Europahalle", "postcode": "1230",
+     "site": "https://reservierung.europahalle.at/reservierung", "date_param": "d"},
+    {"id": "4858", "name": "Playpadel Gänserndorf", "postcode": "2230",
+     "site": "https://playpadel.tennisplatz.info/reservierung", "date_param": "dt"},
 ]
 # Padelzone is booked on Eversports, which blocks automatic reading (Cloudflare check).
 # These are only shown as links at the end of urgent messages, to be opened by hand.
-PADELZONE_LINKS = [
-    ("Padelzone Vienna Sporthotel (1030)", "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"),
-    ("Padelzone Floridsdorf (1210)", "https://www.eversports.at/sb/padelzone-wien-or-floridsdorf-powered-by-cupra"),
-    ("Padelzone C&C Wienerberg (1100)", "https://www.eversports.at/sb/padelzone-wien-or-candc-wienerberg"),
-    ("Padelzone Hagenbrunn (2102) · Sport König", "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"),
-    ("Padelzone Stockerau (2000)", "https://www.eversports.at/s/padelzone-stockerau"),
+_D_PADELZONE = [
+    {"name": "Padelzone Vienna Sporthotel (1030)", "url": "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"},
+    {"name": "Padelzone Floridsdorf (1210)", "url": "https://www.eversports.at/sb/padelzone-wien-or-floridsdorf-powered-by-cupra"},
+    {"name": "Padelzone C&C Wienerberg (1100)", "url": "https://www.eversports.at/sb/padelzone-wien-or-candc-wienerberg"},
+    {"name": "Padelzone Hagenbrunn (2102) · Sport König", "url": "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"},
+    {"name": "Padelzone Stockerau (2000)", "url": "https://www.eversports.at/s/padelzone-stockerau"},
 ]
+_loc = W.table("courts", "locations", ("id", "name"), _D_LOC)
+_far = W.table("courts", "far_locations", ("id", "name"), _D_FAR)
+LOCATIONS = [(r["id"], r["name"]) for r in _loc]
+FAR_LOCATIONS = [(r["id"], r["name"]) for r in _far]
+PADELZONE_LINKS = [(r["name"], r["url"]) for r in W.table("courts", "padelzone", ("name", "url"), _D_PADELZONE)]
 # Locations on another website: (reservation page, name of the date parameter in the link)
-OTHER_SITES = {
-    "3660": ("https://www.racketworld.wien/reservierung", "t"),
-    "4797": ("https://reservierung.europahalle.at/reservierung", "d"),
-    "4858": ("https://playpadel.tennisplatz.info/reservierung", ("d", "t")),  # both, to be safe
-}
-DAYS_AHEAD = 15                 # today + 14 days (16.11 -> 30.11)
-BOOK_AHEAD_DAYS = 14            # the club allows booking only 14 days before the start
-WEEKDAYS = {0, 1, 2, 3}         # 0 = Monday ... 3 = Thursday
-START_TIMES = ["18:00", "18:30", "19:00", "19:30", "20:00"]
-DURATION_MIN = 120              # a court must be free for this long
-MAX_WINDOWS = 25                # max windows listed in one notification
-POSTCODES = {  # shown in brackets after the location name (Vienna postcode = district)
-    "5175": "1220",   # The Dome Stadlau (22nd district)
-    "2665": "1030",   # Padeldome Erdberg (3rd district)
-    "2667": "1220",   # Padeldome Süßenbrunn, Weingartenallee 22
-    "3216": "1210",   # Padeldome Alte Donau, Arbeiterstrandbadstraße 87A
-    "2668": "1230",   # Padeldome Alterlaa, Anton-Baumgartner-Straße 40
-    "3660": "1160",   # Racketworld (Ottakring, 16th district)
-    "4797": "1230",   # Europahalle, An den Steinfeldern 2A
-    "4858": "2230",   # Playpadel Gänserndorf (Lower Austria, outside Vienna)
-}
-MIN_SLOTS_READ = 12             # a day with at least this many slots on the page counts as read
-URGENT_DAYS = 3                 # urgent mode: today and the next 2 days, any weekday
-URGENT_FIRST, URGENT_LAST = "07:00", "21:30"   # urgent mode: every half-hour start in between
+OTHER_SITES = {r["id"]: (r["site"], ("d", "t") if r["date_param"] == "dt" else r["date_param"])
+               for r in _far if isinstance(r.get("site"), str) and isinstance(r.get("date_param"), str)}
+POSTCODES = {r["id"]: r["postcode"] for r in _loc + _far if isinstance(r.get("postcode"), str)}
+DAYS_AHEAD = W.get("courts", "days_ahead", 15)               # today + 14 days
+BOOK_AHEAD_DAYS = W.get("courts", "book_ahead_days", 14)     # the club allows booking only 14 days before the start
+WEEKDAYS = W.weekday_set(W.get("courts", "weekdays", ["Mon", "Tue", "Wed", "Thu"]), {0, 1, 2, 3})
+START_TIMES = W.get("courts", "start_times", ["18:00", "18:30", "19:00", "19:30", "20:00"])
+DURATION_MIN = W.get("courts", "duration_min", 120)          # a court must be free for this long
+MAX_WINDOWS = W.get("courts", "max_windows", 25)             # max windows listed in one notification
+MIN_SLOTS_READ = W.get("courts", "min_slots_read", 12)       # a day with this many slots on the page counts as read
+URGENT_DAYS = W.get("urgent", "days", 3)                     # urgent mode: today and the next 2 days, any weekday
+URGENT_FIRST = W.get("urgent", "first", "07:00")             # urgent mode: every half-hour start in between
+URGENT_LAST = W.get("urgent", "last", "21:30")
 SNAP = pathlib.Path("courts_state.txt")
 URGENT_SNAP = pathlib.Path("urgent_state.txt")
 URGENT_FLAG = pathlib.Path("urgent.txt")   # "on <time>" while urgent mode is switched on
@@ -877,6 +876,11 @@ def bookable(date_iso, hhmm, now):
     return start <= now + dt.timedelta(days=BOOK_AHEAD_DAYS)
 
 
+def health_threshold():
+    """On request (button) you hear about a problem at once; automatic runs wait for a second failure."""
+    return 1 if os.environ.get("MODE", "").strip().lower() == "report" else 2
+
+
 def run_all(page, today=None, now=None):
     now = now or dt.datetime.now(TZ)
     today = today or now.date()
@@ -975,7 +979,9 @@ def run_all(page, today=None, now=None):
 
     if ok_locations == 0:
         print("No location could be read. The page may have changed.")
+        W.health_report("courts", False, "no location could be read (page empty or changed)", threshold=health_threshold())
         sys.exit(2)
+    W.health_report("courts", True)
 
     new = {k: v for k, v in current.items() if k not in old}
     print("Matching windows now:", len(current), "| new:", len(new))
@@ -1045,6 +1051,9 @@ def main():
         )
         try:
             run_all(page)
+        except Exception as exc:  # noqa: BLE001
+            W.health_report("courts", False, f"{type(exc).__name__}: {str(exc)[:80]}", threshold=health_threshold())
+            raise
         finally:
             browser.close()
 

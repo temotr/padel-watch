@@ -23,29 +23,43 @@ import urllib.parse
 import urllib.request
 from zoneinfo import ZoneInfo
 
+import watchlib as W
+
 WORKFLOW = "courts.yml"
 EVENTS_WORKFLOW = "padel_events.yml"
 FLAG = "urgent.txt"
 URGENT_STATE = "urgent_state.txt"
 LISTEN_SECONDS = int(os.environ.get("LISTEN_SECONDS", "50"))   # how long one run keeps listening (0 = look once)
 MAX_AGE_SEC = 30 * 60          # ignore Telegram messages older than this
-URGENT_EVERY_SEC = 270         # start an urgent check when the last run is older than this
-URGENT_MAX_HOURS = 48          # urgent mode switches itself off after this
-PAUSE_HOURS = 2
+# Settings come from config.toml (the numbers here are only the fallback)
+URGENT_EVERY_SEC = W.get("urgent", "every_sec", 270)   # start an urgent check when the last run is older than this
+URGENT_MAX_HOURS = W.get("urgent", "max_hours", 48)     # urgent mode switches itself off after this
+PAUSE_HOURS = W.get("urgent", "pause_hours", 2)
 EVENTS_FILE = "events.txt"
 STATUS_FILE = "status_msg.txt"   # id of the pinned status message
 # GitHub token that cron-job.org uses to start the workflows. Change the date after you renew it.
-TOKEN_EXPIRES = dt.date(2026, 12, 12)
-REMIND_DAYS = (14, 7, 3, 1, 0)   # reminder messages at 09:00 Vienna time, this many days before
+def _date(text, default):
+    try:
+        return dt.date.fromisoformat(text)
+    except ValueError:
+        return default
+
+
+TOKEN_EXPIRES = _date(W.get("bot", "token_expires", "2026-12-12"), dt.date(2026, 12, 12))
+REMIND_DAYS = tuple(n for n in W.get("bot", "remind_days", [14, 7, 3, 1, 0]) if isinstance(n, int))  # at 09:00 Vienna time, this many days before
 REMINDERS_FILE = "reminders.txt"  # remembers which reminders were already sent
-STATUS_EVERY_MIN = 5             # the status message is refreshed about every 5 minutes
+STATUS_EVERY_MIN = W.get("bot", "status_every_min", 5)   # the status message is refreshed about every 5 minutes
 # (label, workflow file, how old the last success may be before it is shown as a warning)
 WATCHERS = [
     ("📅 Sun Set events", "watch.yml", 45),
     ("🎾 Court checks", "courts.yml", None),          # urgent runs: checked separately below
     ("🏆 Padel-Austria tournaments", "padel_events.yml", 180),
 ]
-QUIET_FROM, QUIET_TO = 23, 7   # no automatic urgent checks from 23:00 until 07:00 Vienna time
+HEALTH_KEY = {"watch.yml": "sunset", "courts.yml": "courts", "padel_events.yml": "events"}   # health_<key>.txt
+MUTE_KEY = {"watch.yml": "sunset", "padel_events.yml": "events"}
+MUTE_LABELS = {"sunset": "📅 Sun Set events", "events": "🏆 Tournaments", "meetup": "🤝 Meetup events"}
+MUTE_HOURS = [h for h in W.get("bot", "mute_hours", [2, 8, 24, 72, 168]) if isinstance(h, int) and 0 < h <= 24 * 60] or [2, 8, 24]
+QUIET_FROM, QUIET_TO = W.get("urgent", "quiet_from", 23), W.get("urgent", "quiet_to", 7)   # no automatic urgent checks in between (Vienna time)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
@@ -66,6 +80,9 @@ COMMANDS = {
     "sun set events": "events",
     "meetup events": "meetup",
     "meetup": "meetup",
+    "mute": "mute",
+    "mute alerts": "mute",
+    "unmute": "mute",
     "padel-austria tournaments": "padel_events",
     "padel austria events": "padel_events",
     "stop urgent check": "stop",
@@ -101,13 +118,13 @@ def keyboard():
     if not flag:
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["🚨 Urgent padel", "📅 Sun Set events"],
-                ["🤝 Meetup events"]]
+                ["🤝 Meetup events", "🔕 Mute"]]
     else:
         paused = flag["pause"] and flag["pause"] > dt.datetime.now(dt.timezone.utc)
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["📅 Sun Set events", "🛑 Stop urgent check"],
                 ["▶️ Resume alerts" if paused else "🔕 Pause alerts 2h", "⏱ Extend urgent +48h"],
-                ["🤝 Meetup events"]]
+                ["🤝 Meetup events", "🔕 Mute"]]
     return json.dumps({
         "keyboard": [[{"text": t} for t in row] for row in rows],
         "resize_keyboard": True,
@@ -116,11 +133,11 @@ def keyboard():
 
 
 # ---- Urgent menu: 3 steps with small buttons, one message that is edited in place ----------
-WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "b", "x")
+WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "b", "x", "m", "u", "r")
 WIZ = []                      # taps on menu buttons found in this run: (message_id, callback data)
 WIZ_EARLIEST = [7, 9, 12, 16, 17, 18]
 WIZ_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-WIZ_MAX_DAYS = 15             # today + 14 days: the club books at most 14 days ahead
+WIZ_MAX_DAYS = W.get("courts", "days_ahead", 15)   # today + 14 days: the club books at most 14 days ahead
 
 
 def wiz_pack(st):
@@ -258,6 +275,11 @@ def wiz_run(ops):
         st = cache.get(mid)
         if isinstance(st, str):
             continue                  # already cancelled or started: later taps on old buttons are ignored
+        if kind in ("m", "u", "r"):   # mute menu (it has no state: everything is in the button data)
+            cache[mid] = ("mute", *mute_apply(kind, parts[1:]))
+            continue
+        if isinstance(st, tuple):
+            continue
         if st is None:
             st = wiz_unpack(parts[1]) if len(parts) > 1 else None
         if st is None:
@@ -293,13 +315,121 @@ def wiz_run(ops):
             continue
         cache[mid] = st
     for mid, st in cache.items():
-        if st == "cancel":
-            wiz_edit(mid, "❌ Urgent search cancelled.")
+        if isinstance(st, tuple):
+            wiz_edit(mid, st[1], st[2])
+        elif st == "cancel":
+            wiz_edit(mid, "❌ Cancelled.")
         elif st == "done":
             wiz_edit(mid, "✅ Urgent search set up, details in the message below.")
         else:
             wiz_edit(mid, *wiz_render(st))
     return started
+
+
+# ---- Mute menu: what should be quiet, and for how long (one message, edited in place) ---------
+def hours_label(h):
+    return f"{h} h" if h < 24 else f"{h // 24} day" + ("s" if h >= 48 else "")
+
+
+def mute_items():
+    """[(key, label, muted until or None)]: the three watchers, plus the urgent search while it is on."""
+    mutes = W.mute_read()
+    items = [(k, MUTE_LABELS[k], mutes.get(k)) for k in W.MUTE_NAMES]
+    flag = read_flag()
+    if flag:
+        paused = flag["pause"] if flag["pause"] and flag["pause"] > dt.datetime.now(dt.timezone.utc) else None
+        items.append(("urgent", "🚨 Urgent search", paused))
+    return items
+
+
+def mute_keys(key):
+    if key == "all":
+        return [k for k, _, _ in mute_items()]
+    return [key] if key in [k for k, _, _ in mute_items()] else []
+
+
+def mute_set(keys, until):
+    """Mutes the given watchers until `until` (None = switch them on again). Saves mute.txt / urgent.txt."""
+    mutes = W.mute_read()
+    for k in keys:
+        if k == "urgent":
+            flag = read_flag()
+            if flag:
+                write_flag(True, flag["opts"], since=flag["since"], pause=until,
+                           message="Urgent alerts paused" if until else "Urgent alerts resumed")
+        elif until:
+            mutes[k] = until
+        else:
+            mutes.pop(k, None)
+    with open(W.MUTE_FILE, "w", encoding="utf-8") as f:
+        f.write(W.mute_text(mutes))
+    commit_files("Mute list changed", add=[str(W.MUTE_FILE)])
+
+
+def mute_render(pick=None):
+    """(text, inline keyboard json): step 1 = what, step 2 = how long."""
+    items = mute_items()
+    if pick is None:
+        lines = ["<b><u>🔕 MUTE ALERTS</u></b>", "", "<b>What should be quiet?</b>", ""]
+        for _, label, until in items:
+            lines.append(f"{label}: " + (f"🔕 muted until <b>{vienna(until):%a %d.%m. %H:%M}</b>" if until else "🔔 on"))
+        lines += ["", "While muted, nothing is checked. When the mute ends you get what is new since before."]
+        btns = [wiz_btn(("🔕 " if until else "") + label, f"m:{key}") for key, label, until in items]
+        rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+        rows.append([wiz_btn("🔕 Everything", "m:all")])
+        if any(until for _, _, until in items):
+            rows.append([wiz_btn("🔔 Unmute all", "r:all")])
+        rows.append([wiz_btn("❌ Close", "x")])
+        return "\n".join(lines), json.dumps({"inline_keyboard": rows})
+    names = dict((k, label) for k, label, _ in items)
+    label = "All alerts" if pick == "all" else names.get(pick, pick)
+    muted_now = any(until for k, _, until in items if pick == "all" or k == pick)
+    text = f"<b><u>🔕 MUTE ALERTS</u></b>\n{label}\n\n<b>For how long?</b>"
+    btns = [wiz_btn(hours_label(h), f"u:{pick}:{h}") for h in MUTE_HOURS]
+    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
+    if muted_now:
+        rows.append([wiz_btn("🔔 Unmute now", f"r:{pick}")])
+    rows.append([wiz_btn("⬅️ Back", "m:menu"), wiz_btn("❌ Cancel", "x")])
+    return text, json.dumps({"inline_keyboard": rows})
+
+
+def mute_apply(kind, args):
+    """Handles one tap of the mute menu. Returns (text, keyboard json) for the menu message."""
+    try:
+        if kind == "m":
+            return mute_render(None if args[0] == "menu" else args[0])
+        keys = mute_keys(args[0])
+        if not keys:
+            return mute_render(None)
+        names = dict((k, label) for k, label, _ in mute_items())
+        label = "All alerts" if args[0] == "all" else names[args[0]]
+        if kind == "u":
+            hours = int(args[1])
+            if hours not in MUTE_HOURS:
+                return mute_render(None)
+            until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=hours)
+            mute_set(keys, until)
+            text = (f"🔕 <b>{label}</b> muted for {hours_label(hours)}, until <b>{vienna(until):%a %d.%m. %H:%M}</b>.\n"
+                    "Then you get what is new since before. To end it earlier: tap Mute again.")
+            if "urgent" in keys:
+                text += "\n🚨 The urgent search is paused until then."
+        else:                                                         # kind == "r"
+            mute_set(keys, None)
+            text = f"🔔 <b>{label}</b> switched on again."
+        return text, json.dumps({"inline_keyboard": []})
+    except (IndexError, ValueError):
+        return mute_render(None)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: mute menu failed ({type(exc).__name__}).")
+        return "⚠️ Could not change the mute. See the run log on GitHub.", json.dumps({"inline_keyboard": []})
+
+
+def mute_send_menu():
+    text, markup = mute_render(None)
+    try:
+        tg("sendMessage", chat_id=CHAT, text=text, parse_mode="HTML", reply_markup=markup)
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not send the mute menu ({type(exc).__name__}).")
 
 
 # Small buttons under the "which urgent check?" message
@@ -311,7 +441,8 @@ URGENT_CHOICES = json.dumps({"inline_keyboard": [
 CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "start_main": "start_main"}
 
 HELP = (
-    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events.\n"
+    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events · Mute.\n"
+    "Mute: silence Sun Set, tournaments, Meetup or the urgent search for 2 hours up to 7 days.\n"
     "Urgent padel opens a 3-step menu: days ahead, weekdays, start times.\n"
     "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
     "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
@@ -622,7 +753,7 @@ def check_token_reminder():
         "To renew: GitHub → Settings → Developer settings → Fine-grained tokens → Regenerate. "
         "Then paste the new token into the Authorization header of each cron-job.org job "
         "(\"Bearer <token>\"). Never paste the token into this chat. "
-        "Afterwards change TOKEN_EXPIRES in tg_listen.py to the new date.")
+        "Afterwards change token_expires in config.toml to the new date.")
     with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(done + [tag]) + "\n")
     commit_files("Token reminder sent", add=[REMINDERS_FILE])
@@ -671,7 +802,12 @@ def build_status():
     hour = vienna(now).hour
     quiet = hour >= QUIET_FROM or hour < QUIET_TO
     problems = []
+    mutes = W.mute_read()
     for label, workflow, limit in WATCHERS:
+        until = mutes.get(MUTE_KEY.get(workflow, ""))
+        if until:
+            lines.append(f"🔕 {label}: muted until {stamp(until)}")
+            continue
         try:
             t, failed = run_times(workflow)
         except Exception as exc:  # noqa: BLE001
@@ -684,6 +820,9 @@ def build_status():
         stale = limit is not None and (t is None or (now - t).total_seconds() / 60 > limit)
         if failed:
             text = "❌ " + text + " · last run FAILED"
+            bad = W.health_read(HEALTH_KEY.get(workflow, ""))
+            if bad:
+                text += f" · page could not be read since {stamp(bad['since'])}"
             problems.append(label)
         elif stale:
             text = "⚠️ " + text + " · no recent check"
@@ -691,6 +830,8 @@ def build_status():
         else:
             text = "✅ " + text
         lines.append(text)
+    if mutes.get("meetup"):
+        lines.append(f"🔕 🤝 Meetup alerts: muted until {stamp(mutes['meetup'])}")
     lines += ["", "⚙️ GITHUB"]   # a failing watcher is marked on its own line (❌ / ⚠️), no summary line needed
     left = (TOKEN_EXPIRES - vienna(now).date()).days
     if left < 0:
@@ -848,9 +989,15 @@ def process(cmds, other):
                 say(events_text())
             elif cmd == "meetup":
                 say_html(meetup_text())
+            elif cmd == "mute":
+                mute_send_menu()
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
-                say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
+                say("🏆 Reading the Padel-Austria tournaments "
+                    f"({' · '.join(sorted(W.get('tournaments', 'states', ['Wien'])))} · "
+                    f"{' · '.join(sorted(W.get('tournaments', 'levels', ['Starter'])))} · "
+                    f"{' · '.join(sorted(W.get('tournaments', 'kinds', ['Offener Bewerb'])))} · not full). "
+                    "The list follows in about 2 minutes.")
             elif cmd == "status":
                 update_status(force=True, create=True)
                 say("📌 Status updated. It stays pinned at the top of this chat.")
@@ -921,7 +1068,7 @@ def process(cmds, other):
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v12 · started {_now:%H:%M:%S} Vienna · listening up to {LISTEN_SECONDS} s · "
+    print(f"tg_listen v13 · started {_now:%H:%M:%S} Vienna · listening up to {LISTEN_SECONDS} s · "
           "status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")

@@ -17,20 +17,22 @@ import sys
 import time
 
 import courts
+import watchlib as W
 from courts import BQ_OFF, BQ_ON, IT_OFF, IT_ON, TZ, WEEKDAY_NAMES, bold, heading, link, notify
 
 URL = "https://padel-austria.at/tournaments"
-MAX_PAGES = 12
+MAX_PAGES = W.get("tournaments", "max_pages", 12)
 STATE = pathlib.Path("padel_events_state.txt")
 STATE_HEADER = "# v2"
 
-STATES = {"Wien"}
-LEVELS = {"Starter"}
-KINDS = {"Offener Bewerb"}
+STATES = set(W.get("tournaments", "states", ["Wien"]))        # settings: config.toml
+LEVELS = set(W.get("tournaments", "levels", ["Starter"]))
+KINDS = set(W.get("tournaments", "kinds", ["Offener Bewerb"]))
+EVENING_FROM = W.minutes(W.get("tournaments", "evening_from", "18:00"), 18 * 60)   # Mon-Fri: only from this time
 CONDITION_LINES = [
-    "📍 Region: Wien  ·  🎚 Level: Starter  ·  🏁 Type: Offener Bewerb",
+    f"📍 Region: {', '.join(sorted(STATES))}  ·  🎚 Level: {', '.join(sorted(LEVELS))}  ·  🏁 Type: {', '.join(sorted(KINDS))}",
     "🔓 Only open registrations that are not full",
-    "🕕 Mon-Fri: start from 18:00  ·  🌴 weekends and public holidays: any time",
+    f"🕕 Mon-Fri: start from {EVENING_FROM // 60:02d}:{EVENING_FROM % 60:02d}  ·  🌴 weekends and public holidays: any time",
 ]
 
 CAT = re.compile(r"^(Offener Bewerb|Herren|Damen|Mixed|Jugend)\s*-\s*([A-Za-zÄÖÜäöüß]+)$")
@@ -38,7 +40,6 @@ DATE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})")
 TIME = re.compile(r"\d{1,2}:\d{2}\s*[-–]\s*\d{1,2}:\d{2}")
 SLOTS = re.compile(r"^(\d+)\s*/\s*(\d+)(?:\s*\((\d+)\))?$")
 UUID_HREF = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-EVENING_FROM = 18 * 60       # Mon-Fri: only tournaments starting at 18:00 or later
 
 
 ALL_STATES = {"Wien", "Niederösterreich", "Oberösterreich", "Steiermark", "Tirol", "Kärnten",
@@ -355,16 +356,18 @@ def build(cards, old, forced, now):
 def run(page=None, all_cards=None, now=None):
     now = now or dt.datetime.now(TZ)
     all_cards = all_cards if all_cards is not None else fetch_all(page)
+    forced = os.environ.get("MODE", "").strip().lower() == "report"
     if not all_cards:
         print("Page looks empty or changed, the script may need a fix.")
+        W.health_report("events", False, "no tournaments found on page 1", threshold=1 if forced else 2)
         sys.exit(2)
+    W.health_report("events", True)
     cards = [c for c in all_cards if matches(c)]
     print(f"{len(all_cards)} events read, {len(cards)} match region/level/type.")
     from collections import Counter
     print("Registration texts seen:", dict(Counter(c["status"] or "(none)" for c in cards)))
     print(f"{sum(1 for c in cards if wanted(c))} pass all rules (open, not full, time).")
     old = load_state()
-    forced = os.environ.get("MODE", "").strip().lower() == "report"
     msg = build(cards, old, forced, now)
     if msg:
         title, parts = msg
@@ -375,12 +378,22 @@ def run(page=None, all_cards=None, now=None):
 
 
 def main():
+    forced = os.environ.get("MODE", "").strip().lower() == "report"
+    until = W.muted("events")
+    if until and not forced:     # muted from the Telegram menu: the button still works, the hourly check waits
+        print(f"Muted until {until.astimezone(TZ):%a %d.%m. %H:%M} Vienna time. Nothing checked, nothing saved.")
+        return
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1280, "height": 900})
-        run(page)
-        browser.close()
+        try:
+            run(page)
+        except Exception as exc:  # noqa: BLE001
+            W.health_report("events", False, f"{type(exc).__name__}: {str(exc)[:80]}", threshold=1 if forced else 2)
+            raise
+        finally:
+            browser.close()
 
 
 if __name__ == "__main__":
