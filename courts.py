@@ -876,6 +876,12 @@ def bookable(date_iso, hhmm, now):
     return start <= now + dt.timedelta(days=BOOK_AHEAD_DAYS)
 
 
+def is_network_error(exc):
+    """True when the website did not answer at all (timeout, connection refused ...), as opposed to a changed page."""
+    text = str(exc)
+    return any(w in text for w in ("Timeout", "ERR_CONNECTION", "ERR_NAME", "ERR_INTERNET", "ERR_TIMED_OUT", "ERR_NETWORK"))
+
+
 def health_threshold():
     """On request (button) you hear about a problem at once; automatic runs wait for a second failure."""
     return 1 if os.environ.get("MODE", "").strip().lower() == "report" else 2
@@ -910,11 +916,13 @@ def run_all(page, today=None, now=None):
     ok_locations = 0
 
     scan = LOCATIONS if (urgent and "main" in urgent_opts()) else LOCATIONS + FAR_LOCATIONS
+    dead, site_down = 0, False       # locations that did not answer at all
     for loc, loc_name in scan:
         free, names = {}, {}
         seen_dates, seen_slots = set(), set()
         stats = {}
         total = 0
+        net_fail = 0
         for target in targets:
             if target in seen_dates:
                 continue
@@ -922,7 +930,12 @@ def run_all(page, today=None, now=None):
             try:
                 data = fetch_day(page, page_url(loc, ts))
             except Exception as exc:  # noqa: BLE001
-                print(f"WARNING: {loc_name}: could not read {target}: {exc}")
+                print(f"WARNING: {loc_name}: could not read {target}: {str(exc).splitlines()[0][:150]}")
+                if is_network_error(exc):
+                    net_fail += 1
+                    if net_fail >= 2 and total == 0:   # two timeouts in a row: do not wait for the other days
+                        print(f"WARNING: {loc_name}: not answering, skipping its other days.")
+                        break
                 continue
             n_total, n_free = ingest(data, free, names, seen_dates, seen_slots, stats, only_date=target)
             total += n_total
@@ -944,6 +957,12 @@ def run_all(page, today=None, now=None):
                 if k[0] == loc:
                     current[k] = v
             report[loc] = [(d, 0, 0, False) for d in targets]
+            if net_fail:
+                dead += 1
+                if dead >= 3 and ok_locations == 0:   # nothing answers: stop instead of waiting for every timeout
+                    print("WARNING: the websites do not answer at all. Stopping early.")
+                    site_down = True
+                    break
             continue
 
         ok_locations += 1
@@ -979,7 +998,9 @@ def run_all(page, today=None, now=None):
 
     if ok_locations == 0:
         print("No location could be read. The page may have changed.")
-        W.health_report("courts", False, "no location could be read (page empty or changed)", threshold=health_threshold())
+        reason = ("the website did not answer (timeouts), no layout problem seen" if dead
+                  else "no location could be read (page empty or changed)")
+        W.health_report("courts", False, reason, threshold=health_threshold())
         sys.exit(2)
     W.health_report("courts", True)
 
