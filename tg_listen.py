@@ -27,6 +27,7 @@ WORKFLOW = "courts.yml"
 EVENTS_WORKFLOW = "padel_events.yml"
 FLAG = "urgent.txt"
 URGENT_STATE = "urgent_state.txt"
+LISTEN_SECONDS = int(os.environ.get("LISTEN_SECONDS", "50"))   # how long one run keeps listening (0 = look once)
 MAX_AGE_SEC = 30 * 60          # ignore Telegram messages older than this
 URGENT_EVERY_SEC = 270         # start an urgent check when the last run is older than this
 URGENT_MAX_HOURS = 48          # urgent mode switches itself off after this
@@ -318,11 +319,12 @@ HELP = (
 # ---- Telegram ---------------------------------------------------------------
 def tg(method, **params):
     """Calls the Telegram Bot API. Never prints the URL (it contains the token)."""
+    http_timeout = params.pop("_timeout", 20)
     data = urllib.parse.urlencode(params).encode("utf-8")
     for attempt in range(4):
         req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/{method}", data=data)
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=http_timeout) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code < 500 and exc.code != 429:
@@ -549,8 +551,11 @@ def norm(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def read_commands():
-    res = tg("getUpdates", timeout=0, allowed_updates=json.dumps(["message", "callback_query"]))
+def read_commands(wait=0):
+    """Reads new messages and taps. With wait > 0 Telegram holds the request open until something arrives
+    (long polling), so an answer can follow within a second or two."""
+    res = tg("getUpdates", timeout=wait, _timeout=wait + 15,
+             allowed_updates=json.dumps(["message", "callback_query"]))
     updates = res.get("result", [])
     cmds, other, last_id, now = [], False, 0, time.time()
     for u in updates:
@@ -787,22 +792,8 @@ def update_status(force=False, create=False):
         print(f"WARNING: status update failed ({type(exc).__name__}).")
 
 
-def main():
-    _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v10 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
-    if not TOKEN or not CHAT:
-        print("Telegram secrets are missing.")
-        sys.exit(3)
-    try:
-        cmds, other = read_commands()
-    except (urllib.error.URLError, OSError) as exc:
-        if isinstance(exc, urllib.error.HTTPError) and exc.code < 500 and exc.code != 429:
-            print(f"ERROR: Telegram refused the request (HTTP {exc.code}). Check the token and chat ID.")
-            sys.exit(1)
-        # Telegram is sometimes unreachable for a moment. The next run (1 minute later)
-        # tries again, so this is not a failure worth an error e-mail.
-        print(f"WARNING: Telegram not reachable now ({type(exc).__name__}). Trying again next run.")
-        return
+def process(cmds, other):
+    """Handles what you tapped or typed, then the regular upkeep. Returns True when something failed."""
     started_now = False
     failed = False
     wiz_ops = list(WIZ)
@@ -923,6 +914,44 @@ def main():
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: token reminder failed ({type(exc).__name__}).")
     update_status(force=bool(cmds) or bool(wiz_ops))
+    return failed
+
+
+def main():
+    _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
+    print(f"tg_listen v11 · started {_now:%H:%M:%S} Vienna · listening up to {LISTEN_SECONDS} s · "
+          "status edit runs at minutes ending 0/1 and 5/6")
+    if not TOKEN or not CHAT:
+        print("Telegram secrets are missing.")
+        sys.exit(3)
+    deadline = time.time() + LISTEN_SECONDS
+    failed, first = False, True
+    while True:
+        wait = 0 if first else int(min(20, max(1, deadline - time.time())))
+        t0 = time.time()
+        try:
+            cmds, other = read_commands(wait)
+        except (urllib.error.URLError, OSError) as exc:
+            if isinstance(exc, urllib.error.HTTPError) and exc.code < 500 and exc.code not in (429, 409):
+                print(f"ERROR: Telegram refused the request (HTTP {exc.code}). Check the token and chat ID.")
+                sys.exit(1)
+            # Telegram is sometimes unreachable for a moment (or another listener is still finishing).
+            # Waiting a few seconds and trying again is enough; no failure e-mail needed.
+            print(f"WARNING: Telegram not reachable now ({type(exc).__name__}). Trying again.")
+            if first and LISTEN_SECONDS <= 0:
+                return
+            first = False
+            if time.time() >= deadline:
+                break
+            time.sleep(2)
+            continue
+        if first or cmds or other or WIZ:
+            failed = process(cmds, other) or failed
+        first = False
+        if time.time() >= deadline - 1:
+            break
+        if not cmds and time.time() - t0 < 1:
+            time.sleep(1)               # never hammer Telegram if it answers instantly
     if failed:
         sys.exit(1)
 
