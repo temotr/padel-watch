@@ -67,7 +67,7 @@ date_param = "dt"             # "dt" = both parameters d and t, to be safe
 # Padelzone is on Eversports (blocks automatic reading): only shown as links to open by hand.
 [[courts.padelzone]]
 name = "Padelzone Vienna Sporthotel (1030)"
-url = "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"
+url = "https://www.eversports.at/sb/padelzone-wien-or-vienna-sporthotel"
 
 [[courts.padelzone]]
 name = "Padelzone Floridsdorf (1210)"
@@ -83,7 +83,7 @@ url = "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"
 
 [[courts.padelzone]]
 name = "Padelzone Stockerau (2000)"
-url = "https://www.eversports.at/s/padelzone-stockerau"
+url = "https://www.eversports.at/sb/padelzone-stockerau"
 
 # ------------------------------------------------------------------------------------------
 [urgent]                      # defaults of the urgent search (the menu overrides days, weekdays, times)
@@ -115,6 +115,7 @@ mute_hours = [2, 8, 24, 72, 168] # choices in the Mute menu (hours)
 "watch.yml" = "every 5 min"
 "courts.yml" = "on request + urgent"
 "padel_events.yml" = "hourly"
+meetup = "every 5 min"
 urgent = "checked every 5 min"
 
 # ------------------------------------------------------------------------------------------
