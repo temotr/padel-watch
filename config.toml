@@ -1,0 +1,116 @@
+# PADEL WATCH · all settings in one place
+#
+# Edit this file on GitHub (pencil icon -> Commit changes). The next run uses the new values.
+# Rules: text in "quotes", numbers without quotes, lists in [ ... ].
+# If you make a typing mistake, the built-in defaults are used and the GitHub test
+# ("Tests" in the Actions tab) turns red and sends you a Telegram message.
+
+# ------------------------------------------------------------------------------------------
+[courts]                      # Padeldome courts: "Check all options" button
+days_ahead = 15               # today + 14 days
+book_ahead_days = 14          # the club allows booking only 14 days before the start
+weekdays = ["Mon", "Tue", "Wed", "Thu"]
+start_times = ["18:00", "18:30", "19:00", "19:30", "20:00"]
+duration_min = 120            # a court must be free for this long
+max_windows = 25              # max windows listed in one message
+min_slots_read = 12           # a day with at least this many slots on the page counts as read
+
+# Main locations: they start alerts. id = number from the link ?c=...
+[[courts.locations]]
+id = "5175"
+name = "The Dome Stadlau"
+postcode = "1220"
+
+[[courts.locations]]
+id = "2665"
+name = "Padeldome Erdberg"
+postcode = "1030"
+
+[[courts.locations]]
+id = "2667"
+name = "Padeldome Süßenbrunn"
+postcode = "1220"
+
+[[courts.locations]]
+id = "3216"
+name = "Padeldome Alte Donau"
+postcode = "1210"
+
+# Farther locations: shown at the end, never start an alert on their own.
+# For a location on another website add: site = "https://.../reservierung" and date_param = "t" (or "d")
+[[courts.far_locations]]
+id = "2668"
+name = "Padeldome Alterlaa"
+postcode = "1230"
+
+[[courts.far_locations]]
+id = "3660"
+name = "Racketworld"
+postcode = "1160"
+site = "https://www.racketworld.wien/reservierung"
+date_param = "t"
+
+[[courts.far_locations]]
+id = "4797"
+name = "Europahalle"
+postcode = "1230"
+site = "https://reservierung.europahalle.at/reservierung"
+date_param = "d"
+
+[[courts.far_locations]]
+id = "4858"
+name = "Playpadel Gänserndorf"
+postcode = "2230"
+site = "https://playpadel.tennisplatz.info/reservierung"
+date_param = "dt"             # "dt" = both parameters d and t, to be safe
+
+# Padelzone is on Eversports (blocks automatic reading): only shown as links to open by hand.
+[[courts.padelzone]]
+name = "Padelzone Vienna Sporthotel (1030)"
+url = "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"
+
+[[courts.padelzone]]
+name = "Padelzone Floridsdorf (1210)"
+url = "https://www.eversports.at/sb/padelzone-wien-or-floridsdorf-powered-by-cupra"
+
+[[courts.padelzone]]
+name = "Padelzone C&C Wienerberg (1100)"
+url = "https://www.eversports.at/sb/padelzone-wien-or-candc-wienerberg"
+
+[[courts.padelzone]]
+name = "Padelzone Hagenbrunn (2102) · Sport König"
+url = "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"
+
+[[courts.padelzone]]
+name = "Padelzone Stockerau (2000)"
+url = "https://www.eversports.at/s/padelzone-stockerau"
+
+# ------------------------------------------------------------------------------------------
+[urgent]                      # defaults of the urgent search (the menu overrides days, weekdays, times)
+days = 3
+first = "07:00"
+last = "21:30"
+every_sec = 270               # a new check starts when the last one is older than this
+max_hours = 48                # urgent mode switches itself off after this
+pause_hours = 2               # the "Pause alerts" button
+quiet_from = 23               # no automatic checks from this hour (Vienna time) ...
+quiet_to = 7                  # ... until this hour
+
+# ------------------------------------------------------------------------------------------
+[tournaments]                 # Padel-Austria tournaments (hourly + button)
+states = ["Wien"]
+levels = ["Starter"]
+kinds = ["Offener Bewerb"]
+evening_from = "18:00"        # Mon-Fri only tournaments starting at or after this time
+max_pages = 12                # how many pages of the calendar are read
+
+# ------------------------------------------------------------------------------------------
+[bot]                         # Telegram bot and status message
+status_every_min = 5          # the pinned status is refreshed about every 5 minutes
+token_expires = "2026-12-12"  # GitHub token for cron-job.org: change this date after you renew it
+remind_days = [14, 7, 3, 1, 0]   # reminders at 09:00 this many days before
+mute_hours = [2, 8, 24, 72, 168] # choices in the Mute menu (hours)
+
+# ------------------------------------------------------------------------------------------
+[sunset]                      # Sun Set events (every 5 minutes)
+url = "https://sunsetpadel.at/events"
