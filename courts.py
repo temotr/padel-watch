@@ -92,25 +92,57 @@ def urgent_mode():
 
 
 def active_weekdays():
-    return set(range(7)) if urgent_mode() else WEEKDAYS
+    return urgent_cfg()["weekdays"] if urgent_mode() else WEEKDAYS
+
+
+def urgent_words():
+    try:
+        return URGENT_FLAG.read_text(encoding="utf-8").split()
+    except OSError:
+        return []
 
 
 def urgent_opts():
     """Filters stored in urgent.txt after the start time: 'evenings' and/or 'main'."""
-    try:
-        words = URGENT_FLAG.read_text(encoding="utf-8").split()
-    except OSError:
-        return set()
-    return {w for w in words if w in ("evenings", "main")}
+    return {w for w in urgent_words() if w in ("evenings", "main")}
+
+
+def urgent_cfg():
+    """Settings from the urgent menu, stored in urgent.txt as words: days=7 wd=1111000 from=18 to=20.
+    Missing or broken words fall back to the old urgent behaviour (3 days, any weekday, any time)."""
+    cfg = {"days": URGENT_DAYS, "weekdays": set(range(7)), "first": None, "last": None}
+    for w in urgent_words():
+        key, _, val = w.partition("=")
+        try:
+            if key == "days":
+                cfg["days"] = max(1, min(int(val), DAYS_AHEAD))
+            elif key == "wd" and len(val) == 7 and set(val) <= {"0", "1"} and "1" in val:
+                cfg["weekdays"] = {i for i, c in enumerate(val) if c == "1"}
+            elif key == "from" and 0 <= int(val) <= 23:
+                cfg["first"] = int(val)
+            elif key == "to" and 0 <= int(val) <= 23:
+                cfg["last"] = int(val)
+        except ValueError:
+            pass
+    if cfg["first"] is not None and cfg["last"] is not None and cfg["last"] < cfg["first"]:
+        cfg["first"] = cfg["last"] = None
+    return cfg
+
+
+def urgent_days():
+    return urgent_cfg()["days"]
 
 
 def active_starts():
     """Start times to look for: your evening rules, or every half hour in urgent mode."""
     if not urgent_mode():
         return START_TIMES
-    first = "17:00" if "evenings" in urgent_opts() else URGENT_FIRST
+    cfg = urgent_cfg()
+    first = f"{cfg['first']:02d}:00" if cfg["first"] is not None else ("17:00" if "evenings" in urgent_opts() else URGENT_FIRST)
     out, t = [], int(first[:2]) * 60 + int(first[3:])
     last = int(URGENT_LAST[:2]) * 60 + int(URGENT_LAST[3:])
+    if cfg["last"] is not None:   # "latest start 21" means 21:30, the last start the club offers
+        last = cfg["last"] * 60 + (30 if cfg["last"] >= 21 else 0)
     while t <= last:
         out.append(f"{t // 60:02d}:{t % 60:02d}")
         t += 30
@@ -565,7 +597,7 @@ def checked_lines_urgent(report):
     bad = [f"{short_label(loc).split(' ', 1)[1]} {d:%d.%m}"
            for loc, rows in report.items() for d, slots, n, ok in rows if not ok and not n]
     span = f"{days[0]:%d.%m}-{days[-1]:%d.%m}" if len(days) > 1 else f"{days[0]:%d.%m}"
-    head = heading(f"CHECKED LOCATIONS {span} · next {URGENT_DAYS} days")
+    head = heading(f"CHECKED LOCATIONS {span} · next {urgent_days()} days")
     if bad:
         return [head, "", "⚠️ not read: " + ", ".join(bad)]
     return [head, "", f"✅ all {len(report)} locations read"]
@@ -654,12 +686,28 @@ def describe_far(items, new=(), report=None):
     return lines
 
 
+def weekday_text(days):
+    days = sorted(days)
+    if len(days) == 7:
+        return "any day"
+    names = [WEEKDAY_NAMES[i][:3] for i in days]
+    if len(days) > 1 and days == list(range(days[0], days[-1] + 1)):
+        return f"{names[0]}-{names[-1]}"
+    return ", ".join(names)
+
+
 def conditions_text():
     if urgent_mode():
         opts = urgent_opts()
-        when = "from 17:00" if "evenings" in opts else "any time"
+        cfg = urgent_cfg()
+        starts = active_starts()
+        if cfg["first"] is not None or cfg["last"] is not None:
+            when = f"start {starts[0]}-{starts[-1]}"
+        else:
+            when = "from 17:00" if "evenings" in opts else "any time"
         where = " · main 4 only" if "main" in opts else ""
-        return f"Next {URGENT_DAYS} days · any day · {DURATION_MIN / 60:g}h block · {when}{where}"
+        return (f"Next {cfg['days']} days · {weekday_text(cfg['weekdays'])} · "
+                f"{DURATION_MIN / 60:g}h block · {when}{where}")
     days = sorted(WEEKDAYS)
     names = [WEEKDAY_NAMES[i][:3] for i in days]
     contiguous = days == list(range(days[0], days[-1] + 1))
@@ -837,7 +885,7 @@ def run_all(page, today=None, now=None):
         if not urgent_is_on():
             print("Urgent mode is switched off. Nothing to do.")
             return
-    days = URGENT_DAYS if urgent else DAYS_AHEAD
+    days = urgent_days() if urgent else DAYS_AHEAD
     targets = [
         today + dt.timedelta(days=i)
         for i in range(days)
@@ -845,7 +893,7 @@ def run_all(page, today=None, now=None):
     ]
     first_run, old = load_state()
     if urgent and not targets:
-        print("Urgent mode: the next days are not Mon-Thu, nothing to check.")
+        print("Urgent mode: none of the next days matches the chosen weekdays, nothing to check.")
         if first_run:
             notify(make_title({}, True),
                    "\n\n".join(["\n".join(header_lines(now)),
