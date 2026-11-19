@@ -1,3 +1,4 @@
+
 """Telegram remote control for the Padeldome court check.
 
 Run every minute (cron-job.org -> workflow_dispatch). Only messages from your own
@@ -11,6 +12,7 @@ Urgent mode is remembered in the repo file urgent.txt:
   "off"  or  "on <time> [evenings] [main] [pause=<time>]"
 """
 import datetime as dt
+import html
 import json
 import os
 import re
@@ -47,6 +49,7 @@ QUIET_FROM, QUIET_TO = 23, 7   # no automatic urgent checks from 23:00 until 07:
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
+MEETUP_URL = os.environ.get("MEETUP_EVENTS_URL", "")   # private address of the Google script (secret)
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 REF = os.environ.get("GITHUB_REF_NAME", "main") or "main"
@@ -61,6 +64,8 @@ COMMANDS = {
     "resume alerts": "pause",
     "all locations": "start_all",
     "sun set events": "events",
+    "meetup events": "meetup",
+    "meetup": "meetup",
     "padel-austria tournaments": "padel_events",
     "padel austria events": "padel_events",
     "stop urgent check": "stop",
@@ -95,12 +100,14 @@ def keyboard():
     flag = read_flag()
     if not flag:
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
-                ["🚨 Urgent padel", "📅 Sun Set events"]]
+                ["🚨 Urgent padel", "📅 Sun Set events"],
+                ["🤝 Meetup events"]]
     else:
         paused = flag["pause"] and flag["pause"] > dt.datetime.now(dt.timezone.utc)
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["📅 Sun Set events", "🛑 Stop urgent check"],
-                ["▶️ Resume alerts" if paused else "🔕 Pause alerts 2h", "⏱ Extend urgent +48h"]]
+                ["▶️ Resume alerts" if paused else "🔕 Pause alerts 2h", "⏱ Extend urgent +48h"],
+                ["🤝 Meetup events"]]
     return json.dumps({
         "keyboard": [[{"text": t} for t in row] for row in rows],
         "resize_keyboard": True,
@@ -117,7 +124,7 @@ URGENT_CHOICES = json.dumps({"inline_keyboard": [
 CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "start_main": "start_main"}
 
 HELP = (
-    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events.\n"
+    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events.\n"
     "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
     "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
 )
@@ -272,6 +279,61 @@ def events_text():
         title, _, rest = l.partition(" | ")
         out.append(f"• {title} ({rest.replace(' / ', ' of ')} spots taken)" if rest and rest != "?" else f"• {title}")
     out += ["", "https://sunsetpadel.at/events"]
+    return "\n".join(out)
+
+
+def say_html(text):
+    try:
+        tg("sendMessage", chat_id=CHAT, text=text, parse_mode="HTML", reply_markup=keyboard(),
+           disable_web_page_preview="true")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: reply failed ({type(exc).__name__}).")
+
+
+def meetup_text():
+    """Upcoming padel events from the Meetup mails (list kept by the Google script)."""
+    if not MEETUP_URL:
+        return ("🤝 The Meetup list is not connected yet. Add the secret MEETUP_EVENTS_URL in GitHub "
+                "(see the setup guide).")
+    try:
+        req = urllib.request.Request(MEETUP_URL, headers={"User-Agent": "padel-watch"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body = r.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: Meetup list not reachable ({type(exc).__name__}).")
+        return "🤝 Could not read the Meetup list right now. Try again in a minute."
+    if not body.startswith("# v1"):
+        print("WARNING: Meetup list answer was not the expected list (wrong or expired address?).")
+        return "🤝 The Meetup list address did not answer correctly. Check the secret MEETUP_EVENTS_URL."
+    today = dt.datetime.now(ZoneInfo("Europe/Vienna")).date()
+    rows = []
+    for line in body.splitlines()[1:]:
+        f = (line.split("|") + [""] * 7)[:7]
+        try:
+            day = dt.date.fromisoformat(f[0])
+        except ValueError:
+            continue
+        if day >= today:
+            rows.append((day, *f[1:]))
+    e = html.escape
+    out = ["<b><u>🤝 MEETUP · upcoming padel events</u></b>",
+           "<i>From your Meetup e-mail alerts, not finished yet</i>", ""]
+    if not rows:
+        out.append("No upcoming padel events known yet.")
+    last = None
+    for day, tm, title, venue, price, going, url in rows:
+        if day != last:
+            if last is not None:
+                out.append("")
+            out.append(f"<b><u>{day:%a %d.%m.}</u></b>")
+            last = day
+        name = f'<a href="{e(url)}">{e(title)}</a>' if url else e(title)
+        out.append(f"{'⏰ ' + tm + '  ' if tm else ''}🏆 <i>{name}</i>")
+        extra = [x for x in (f"📍 <b>{e(venue)}</b>" if venue else "",
+                             f"💶 {e(price)}" if price else "",
+                             f"👥 {e(going)} going" if going else "") if x]
+        if extra:
+            out.append("   " + " · ".join(extra))
     return "\n".join(out)
 
 
@@ -517,7 +579,7 @@ def update_status(force=False, create=False):
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v8 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
+    print(f"tg_listen v9 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
         sys.exit(3)
@@ -579,6 +641,8 @@ def main():
                     started_now = True
             elif cmd == "events":
                 say(events_text())
+            elif cmd == "meetup":
+                say_html(meetup_text())
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments (Wien · Starter · Offener Bewerb · not full). The list follows in about 2 minutes.")
