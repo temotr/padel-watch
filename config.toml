@@ -91,6 +91,7 @@ days = 3
 first = "07:00"
 last = "21:30"
 every_sec = 270               # a new check starts when the last one is older than this
+backoff_sec = 900             # after a FAILED check wait this long (do not hammer a website that does not answer)
 max_hours = 48                # urgent mode switches itself off after this
 pause_hours = 2               # the "Pause alerts" button
 quiet_from = 23               # no automatic checks from this hour (Vienna time) ...
