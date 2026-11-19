@@ -57,6 +57,7 @@ WATCHERS = [
 ]
 CADENCE = {   # shown in brackets in the status. Only text: change it in config.toml when you change the cron-job.org schedule
     "watch.yml": "every 5 min", "courts.yml": "on request + urgent", "padel_events.yml": "hourly", "urgent": "checked every 5 min",
+    "meetup": "every 5 min",
 }
 CADENCE.update({k: v for k, v in W.get("bot", "cadence", {}).items() if k in CADENCE and isinstance(v, str)})
 HEALTH_KEY = {"watch.yml": "sunset", "courts.yml": "courts", "padel_events.yml": "events"}   # health_<key>.txt
@@ -634,6 +635,46 @@ def say_html(text):
         print(f"WARNING: reply failed ({type(exc).__name__}).")
 
 
+def meetup_fetch():
+    """The raw answer of the Google script, or None when it cannot be reached."""
+    try:
+        req = urllib.request.Request(MEETUP_URL, headers={"User-Agent": "padel-watch"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: Meetup list not reachable ({type(exc).__name__}).")
+        return None
+
+
+def meetup_status_line(mutes, now):
+    """One status line for Meetup: when the Google script last checked your mails."""
+    label = f"🤝 Meetup events ({CADENCE['meetup']})"
+    until = mutes.get("meetup")
+    if until:
+        return f"🔕 {label}: muted until {stamp(until)}"
+    if not MEETUP_URL:
+        return f"⚪ {label}: not connected yet"
+    body = meetup_fetch()
+    if body is None or not body.startswith("# v1"):
+        return f"❓ {label}: could not read the list"
+    head = body.splitlines()[0]
+
+    def moment(name):
+        m = re.search(rf"{name}=(\S+)", head)
+        try:
+            return dt.datetime.fromisoformat(m.group(1).replace("Z", "+00:00")) if m else None
+        except ValueError:
+            return None
+
+    checked = moment("checked")
+    if checked is None:
+        return f"⚠️ {label}: last check unknown (update the Google script)"
+    text = f"{label}: last check {stamp(checked)}"
+    if (now - checked).total_seconds() > 20 * 60:
+        return "⚠️ " + text + " · no recent check"
+    return "✅ " + text
+
+
 def meetup_text():
     """Upcoming padel events from the Meetup mails (list kept by the Google script)."""
     if not MEETUP_URL:
@@ -834,8 +875,7 @@ def build_status():
         else:
             text = "✅ " + text
         lines.append(text)
-    if mutes.get("meetup"):
-        lines.append(f"🔕 🤝 Meetup alerts: muted until {stamp(mutes['meetup'])}")
+    lines.append(meetup_status_line(mutes, now))
     lines += ["", "⚙️ GITHUB"]   # a failing watcher is marked on its own line (❌ / ⚠️), no summary line needed
     left = (TOKEN_EXPIRES - vienna(now).date()).days
     if left < 0:
