@@ -55,6 +55,10 @@ WATCHERS = [
     ("🎾 Court checks", "courts.yml", None),          # urgent runs: checked separately below
     ("🏆 Padel-Austria tournaments", "padel_events.yml", 180),
 ]
+CADENCE = {   # shown in brackets in the status. Only text: change it in config.toml when you change the cron-job.org schedule
+    "watch.yml": "every 5 min", "courts.yml": "on request + urgent", "padel_events.yml": "hourly", "urgent": "checked every 5 min",
+}
+CADENCE.update({k: v for k, v in W.get("bot", "cadence", {}).items() if k in CADENCE and isinstance(v, str)})
 HEALTH_KEY = {"watch.yml": "sunset", "courts.yml": "courts", "padel_events.yml": "events"}   # health_<key>.txt
 MUTE_KEY = {"watch.yml": "sunset", "padel_events.yml": "events"}
 MUTE_LABELS = {"sunset": "📅 Sun Set events", "events": "🏆 Tournaments", "meetup": "🤝 Meetup events"}
@@ -120,11 +124,10 @@ def keyboard():
                 ["🚨 Urgent padel", "📅 Sun Set events"],
                 ["🤝 Meetup events", "🔕 Mute"]]
     else:
-        paused = flag["pause"] and flag["pause"] > dt.datetime.now(dt.timezone.utc)
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["📅 Sun Set events", "🛑 Stop urgent check"],
-                ["▶️ Resume alerts" if paused else "🔕 Pause alerts 2h", "⏱ Extend urgent +48h"],
-                ["🤝 Meetup events", "🔕 Mute"]]
+                ["⏱ Extend urgent +48h", "🔕 Mute"],
+                ["🤝 Meetup events"]]
     return json.dumps({
         "keyboard": [[{"text": t} for t in row] for row in rows],
         "resize_keyboard": True,
@@ -444,7 +447,7 @@ HELP = (
     "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events · Mute.\n"
     "Mute: silence Sun Set, tournaments, Meetup or the urgent search for 2 hours up to 7 days.\n"
     "Urgent padel opens a 3-step menu: days ahead, weekdays, start times.\n"
-    "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
+    "While urgent mode is on you also get Stop and Extend. To pause the urgent search, use Mute.\n\n"
     "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
 )
 
@@ -795,7 +798,7 @@ def build_status():
         if flag["pause"] and flag["pause"] > now:
             lines.append(f"🚨 Urgent: ON, ⏸ paused until {stamp(flag['pause'], now)}")
         else:
-            lines.append("🚨 Urgent: ON")
+            lines.append(f"🚨 Urgent: ON ({CADENCE['urgent']})")
         lines.append(f"   {extra} · ends {ends:%a %d.%m. %H:%M}")
     else:
         lines.append("🚨 Urgent: off")
@@ -804,6 +807,7 @@ def build_status():
     problems = []
     mutes = W.mute_read()
     for label, workflow, limit in WATCHERS:
+        label = f"{label} ({CADENCE[workflow]})"
         until = mutes.get(MUTE_KEY.get(workflow, ""))
         if until:
             lines.append(f"🔕 {label}: muted until {stamp(until)}")
