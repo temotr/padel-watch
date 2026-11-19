@@ -116,7 +116,7 @@ def keyboard():
 
 
 # ---- Urgent menu: 3 steps with small buttons, one message that is edited in place ----------
-WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "x")
+WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "b", "x")
 WIZ = []                      # taps on menu buttons found in this run: (message_id, callback data)
 WIZ_EARLIEST = [7, 9, 12, 16, 17, 18]
 WIZ_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -159,7 +159,7 @@ def wiz_render(st):
     summary = f"📅 <b>{st['days']} days</b>"
     if st["step"] == 2:
         text = (f"<b><u>🚨 URGENT SEARCH · step 2 of 3</u></b>\n{summary}\n\n"
-                "<b>Which weekdays?</b> Tap a day to switch it on or off.")
+                "<b>Which weekdays?</b> Tap single days and then Next, or tap a ready-made set to go on right away.")
         day_btns = [wiz_btn(("✅ " if c == "1" else "⬜ ") + WIZ_DAY_NAMES[i], f"t:{pk}:{i}")
                     for i, c in enumerate(st["mask"])]
         rows = [day_btns[:4], day_btns[4:],
@@ -178,7 +178,7 @@ def wiz_render(st):
                  wiz_btn("⚡ Any time", f"g:{pk}:7:21")],
                 [wiz_btn(f"{h:02d}:00", f"f:{pk}:{h}") for h in WIZ_EARLIEST],
                 [wiz_btn(("🏠 Main 4 only: ON" if st["main"] else "🏠 Main 4 only: OFF"), f"o:{pk}")],
-                [wiz_btn("⬅️ Back", f"p:{pk}:{st['mask']}"), wiz_btn("❌ Cancel", "x")]]
+                [wiz_btn("⬅️ Back", f"b:{pk}"), wiz_btn("❌ Cancel", "x")]]
         return text, json.dumps({"inline_keyboard": rows})
     text = (f"<b><u>🚨 URGENT SEARCH · step 3 of 3</u></b>\n{summary}\n"
             f"⏰ earliest start <b>{st['frm']:02d}:00</b>\n\n<b>Latest start?</b> The search starts right after your tap.")
@@ -268,9 +268,11 @@ def wiz_run(ops):
                 mask = list(st["mask"])
                 mask[i] = "0" if mask[i] == "1" else "1"
                 st["mask"], st["step"] = "".join(mask), 2
-            elif kind == "p":
+            elif kind == "p":                  # a ready-made set of days: choose it and go on to step 3
                 if len(parts[2]) == 7 and "1" in parts[2] and set(parts[2]) <= {"0", "1"}:
                     st["mask"] = parts[2]
+                    st["step"], st["frm"] = 3, None
+            elif kind == "b":                  # back to the weekdays
                 st["step"], st["frm"] = 2, None
             elif kind == "n":
                 if "1" in st["mask"]:
@@ -919,7 +921,7 @@ def process(cmds, other):
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v11 · started {_now:%H:%M:%S} Vienna · listening up to {LISTEN_SECONDS} s · "
+    print(f"tg_listen v12 · started {_now:%H:%M:%S} Vienna · listening up to {LISTEN_SECONDS} s · "
           "status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
