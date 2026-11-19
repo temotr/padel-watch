@@ -836,10 +836,33 @@ def notify(title, message, click, tags="tennis", buttons=()):
 
 
 def fetch_day(page, url):
-    page.goto(url, wait_until="networkidle")
+    try:
+        page.goto(url, wait_until="networkidle")
+    except Exception as exc:  # noqa: BLE001
+        text = str(exc)
+        if "Timeout" not in text or "ERR_" in text:
+            raise                      # the connection itself failed: nothing to read
+        # The page may have loaded but never went "quiet" (a tracker or chat widget keeps talking).
+        # Carry on with what is there: the court list is checked below.
+        print("NOTE: page did not go quiet within 30 s, reading what is already loaded.")
     page.wait_for_selector("div.court[data-cid]", timeout=20000)
     page.wait_for_timeout(1000)
     return page.evaluate(JS)
+
+
+def diagnose(url):
+    """One plain web request, only to show in the log WHY pages do not load (blocked, no answer, or fine)."""
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "padel-watch/1.0 (log diagnostic)"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            size = len(r.read(300000))
+            print(f"DIAG: plain request -> HTTP {r.status} in {time.time() - t0:.1f} s, {size} bytes, "
+                  f"server: {r.headers.get('server', '?')}")
+    except urllib.error.HTTPError as exc:
+        print(f"DIAG: plain request -> HTTP {exc.code} in {time.time() - t0:.1f} s, server: {exc.headers.get('server', '?')}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"DIAG: plain request failed after {time.time() - t0:.1f} s: {type(exc).__name__}")
 
 
 def snap_path():
@@ -998,6 +1021,8 @@ def run_all(page, today=None, now=None):
 
     if ok_locations == 0:
         print("No location could be read. The page may have changed.")
+        if targets:
+            diagnose(page_url(LOCATIONS[0][0], int(dt.datetime.combine(targets[0], dt.time(8, 0), TZ).timestamp())))
         reason = ("the website did not answer (timeouts), no layout problem seen" if dead
                   else "no location could be read (page empty or changed)")
         W.health_report("courts", False, reason, threshold=health_threshold())
