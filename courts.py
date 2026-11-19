@@ -40,11 +40,11 @@ _D_FAR = [  # alternative locations: shown at the end, never start an alert on t
 # Padelzone is booked on Eversports, which blocks automatic reading (Cloudflare check).
 # These are only shown as links at the end of urgent messages, to be opened by hand.
 _D_PADELZONE = [
-    {"name": "Padelzone Vienna Sporthotel (1030)", "url": "https://www.eversports.at/s/padelzone-wien-or-vienna-sporthotel"},
+    {"name": "Padelzone Vienna Sporthotel (1030)", "url": "https://www.eversports.at/sb/padelzone-wien-or-vienna-sporthotel"},
     {"name": "Padelzone Floridsdorf (1210)", "url": "https://www.eversports.at/sb/padelzone-wien-or-floridsdorf-powered-by-cupra"},
     {"name": "Padelzone C&C Wienerberg (1100)", "url": "https://www.eversports.at/sb/padelzone-wien-or-candc-wienerberg"},
     {"name": "Padelzone Hagenbrunn (2102) · Sport König", "url": "https://www.eversports.at/sb/padelzone-hagenbrunn-or-sport-koenig"},
-    {"name": "Padelzone Stockerau (2000)", "url": "https://www.eversports.at/s/padelzone-stockerau"},
+    {"name": "Padelzone Stockerau (2000)", "url": "https://www.eversports.at/sb/padelzone-stockerau"},
 ]
 _loc = W.table("courts", "locations", ("id", "name"), _D_LOC)
 _far = W.table("courts", "far_locations", ("id", "name"), _D_FAR)
