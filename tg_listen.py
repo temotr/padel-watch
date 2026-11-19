@@ -1,4 +1,3 @@
-
 """Telegram remote control for the Padeldome court check.
 
 Run every minute (cron-job.org -> workflow_dispatch). Only messages from your own
@@ -115,6 +114,191 @@ def keyboard():
     })
 
 
+# ---- Urgent menu: 3 steps with small buttons, one message that is edited in place ----------
+WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "x")
+WIZ = []                      # taps on menu buttons found in this run: (message_id, callback data)
+WIZ_EARLIEST = [7, 9, 12, 16, 17, 18]
+WIZ_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+WIZ_MAX_DAYS = 15             # today + 14 days: the club books at most 14 days ahead
+
+
+def wiz_pack(st):
+    return f"{st['days']}.{st['mask']}.{st['main']}.{'-' if st['frm'] is None else st['frm']}"
+
+
+def wiz_unpack(text):
+    try:
+        days, mask, main, frm = text.split(".")
+        st = {"days": int(days), "mask": mask, "main": int(main),
+              "frm": None if frm == "-" else int(frm), "step": 2}
+        if not (1 <= st["days"] <= WIZ_MAX_DAYS and len(mask) == 7 and set(mask) <= {"0", "1"}
+                and st["main"] in (0, 1) and (st["frm"] is None or 0 <= st["frm"] <= 23)):
+            return None
+        return st
+    except (ValueError, AttributeError):
+        return None
+
+
+def wiz_btn(text, data):
+    return {"text": text, "callback_data": data}
+
+
+def wiz_render(st):
+    """(text, inline keyboard json) for the current step of the menu."""
+    pk = wiz_pack(st) if st else ""
+    if st is None:                                                    # step 1
+        text = ("<b><u>🚨 URGENT SEARCH · step 1 of 3</u></b>\n\n<b>How many days ahead?</b>\n"
+                "Today counts as day 1. The club books up to 14 days ahead, so 15 is the maximum.")
+        nums = [wiz_btn(str(n), f"d:{n}") for n in range(1, WIZ_MAX_DAYS + 1)]
+        rows = [[wiz_btn("⚡ Evenings Mon-Thu · next 10 days · 18-20", "g:10.1111000.0.-:18:20")],
+                [wiz_btn("⚡ As before: 3 days · any day · any time", "g:3.1111111.0.-:7:21")]]
+        rows += [nums[i:i + 5] for i in range(0, len(nums), 5)]
+        rows.append([wiz_btn("❌ Cancel", "x")])
+        return text, json.dumps({"inline_keyboard": rows})
+    summary = f"📅 <b>{st['days']} days</b>"
+    if st["step"] == 2:
+        text = (f"<b><u>🚨 URGENT SEARCH · step 2 of 3</u></b>\n{summary}\n\n"
+                "<b>Which weekdays?</b> Tap a day to switch it on or off.")
+        day_btns = [wiz_btn(("✅ " if c == "1" else "⬜ ") + WIZ_DAY_NAMES[i], f"t:{pk}:{i}")
+                    for i, c in enumerate(st["mask"])]
+        rows = [day_btns[:4], day_btns[4:],
+                [wiz_btn("Mon-Thu", f"p:{pk}:1111000"), wiz_btn("All days", f"p:{pk}:1111111"),
+                 wiz_btn("Sat-Sun", f"p:{pk}:0000011")],
+                [wiz_btn("➡️ Next", f"n:{pk}")],
+                [wiz_btn("❌ Cancel", "x")]]
+        return text, json.dumps({"inline_keyboard": rows})
+    where = "main 4 locations only" if st["main"] else "all locations"
+    summary += f" · 🗓 <b>{wd_text(st['mask'])}</b> · 📍 {where}"
+    if st["frm"] is None:                                              # step 3, earliest start
+        text = (f"<b><u>🚨 URGENT SEARCH · step 3 of 3</u></b>\n{summary}\n\n"
+                "<b>Earliest start of the game?</b> (a game lasts 2 hours)\n"
+                "Or tap a shortcut to start the search right away.")
+        rows = [[wiz_btn("⚡ 18-20 evening", f"g:{pk}:18:20"), wiz_btn("⚡ 17-21", f"g:{pk}:17:21"),
+                 wiz_btn("⚡ Any time", f"g:{pk}:7:21")],
+                [wiz_btn(f"{h:02d}:00", f"f:{pk}:{h}") for h in WIZ_EARLIEST],
+                [wiz_btn(("🏠 Main 4 only: ON" if st["main"] else "🏠 Main 4 only: OFF"), f"o:{pk}")],
+                [wiz_btn("⬅️ Back", f"p:{pk}:{st['mask']}"), wiz_btn("❌ Cancel", "x")]]
+        return text, json.dumps({"inline_keyboard": rows})
+    text = (f"<b><u>🚨 URGENT SEARCH · step 3 of 3</u></b>\n{summary}\n"
+            f"⏰ earliest start <b>{st['frm']:02d}:00</b>\n\n<b>Latest start?</b> The search starts right after your tap.")
+    hours = list(range(st["frm"], 22)) or [21]
+    btns = [wiz_btn(f"{h:02d}:{'30' if h >= 21 else '00'}", f"g:{pk}:{st['frm']}:{h}") for h in hours]
+    rows = [btns[i:i + 5] for i in range(0, len(btns), 5)]
+    rows.append([wiz_btn("⬅️ Earlier start", f"n:{pk}"), wiz_btn("❌ Cancel", "x")])
+    return text, json.dumps({"inline_keyboard": rows})
+
+
+def wiz_send_first():
+    text, markup = wiz_render(None)
+    try:
+        tg("sendMessage", chat_id=CHAT, text=text, parse_mode="HTML", reply_markup=markup)
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not send the urgent menu ({type(exc).__name__}).")
+
+
+def wiz_edit(mid, text, markup=None):
+    try:
+        tg("editMessageText", chat_id=CHAT, message_id=mid, text=text, parse_mode="HTML",
+           reply_markup=markup or json.dumps({"inline_keyboard": []}))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
+        if "not modified" not in body.lower():
+            print(f"WARNING: could not update the urgent menu: HTTP {exc.code} {body[:150]}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not update the urgent menu ({type(exc).__name__}).")
+
+
+def wiz_start(st, first, last):
+    """Switches urgent mode on with the chosen settings. True when it was started."""
+    opts = [f"days={st['days']}", f"wd={st['mask']}", f"from={first}", f"to={last}"]
+    if st["main"]:
+        opts.append("main")
+    flag = read_flag()
+    if flag and flag["opts"] == opts:
+        say(f"🚨 Urgent mode is already on with these settings ({opts_text(opts)}).")
+        return False
+    set_urgent(True, opts)
+    dispatch("urgent")
+    today = dt.datetime.now(ZoneInfo("Europe/Vienna")).date()
+    n_days = sum(1 for i in range(st["days"]) if st["mask"][(today + dt.timedelta(days=i)).weekday()] == "1")
+    minutes = n_days * (4 if st["main"] else 8) * 2.8 / 60          # about 2.8 s per page and location
+    text = (f"🚨 Urgent search {'switched' if flag else 'ON'}\n"
+            f"📅 Next {st['days']} days (today counts as day 1)\n"
+            f"🗓 {wd_text(st['mask'])}\n"
+            f"🕕 Starts {first:02d}:00-{last:02d}:{'30' if last >= 21 else '00'}, 2h block\n"
+            f"📍 {'Main 4 locations only' if st['main'] else 'All locations'}\n"
+            "🔁 About every 5 minutes, ends after 48 hours, no checks 23:00-07:00.")
+    if minutes >= 4:
+        text += (f"\n⏱ One round takes about {minutes:.0f} minutes with this many days, so a message can come a "
+                 "little later." + ("" if st["main"] else " 'Main 4 only' makes it about twice as fast."))
+    say(text + "\n\nButtons below: Pause · Extend · Stop")
+    return True
+
+
+def wiz_run(ops):
+    """Applies the taps in the order they came (several taps within a minute are fine), then redraws each
+    menu message once. Returns True when an urgent search was started."""
+    started = False
+    cache = {}                       # message id -> state dict, or "cancel" / "done"
+    for mid, data in ops:
+        parts = data.split(":")
+        kind = parts[0]
+        if kind == "x":
+            cache[mid] = "cancel"
+            continue
+        if kind == "d":
+            try:
+                n = int(parts[1])
+            except (IndexError, ValueError):
+                continue
+            if 1 <= n <= WIZ_MAX_DAYS:
+                cache[mid] = {"days": n, "mask": "1111000", "main": 0, "frm": None, "step": 2}
+            continue
+        st = cache.get(mid)
+        if isinstance(st, str):
+            continue                  # already cancelled or started: later taps on old buttons are ignored
+        if st is None:
+            st = wiz_unpack(parts[1]) if len(parts) > 1 else None
+        if st is None:
+            continue
+        try:
+            if kind == "t":
+                i = int(parts[2])
+                mask = list(st["mask"])
+                mask[i] = "0" if mask[i] == "1" else "1"
+                st["mask"], st["step"] = "".join(mask), 2
+            elif kind == "p":
+                if len(parts[2]) == 7 and "1" in parts[2] and set(parts[2]) <= {"0", "1"}:
+                    st["mask"] = parts[2]
+                st["step"], st["frm"] = 2, None
+            elif kind == "n":
+                if "1" in st["mask"]:
+                    st["step"], st["frm"] = 3, None
+            elif kind == "f":
+                st["step"], st["frm"] = 3, int(parts[2])
+            elif kind == "o":
+                st["main"] = 0 if st["main"] else 1
+                st["step"] = 3
+            elif kind == "g":
+                first, last = int(parts[2]), int(parts[3])
+                if "1" in st["mask"] and 0 <= first <= last <= 23:
+                    if wiz_start(st, first, last):
+                        started = True
+                    cache[mid] = "done"
+                    continue
+        except (IndexError, ValueError):
+            continue
+        cache[mid] = st
+    for mid, st in cache.items():
+        if st == "cancel":
+            wiz_edit(mid, "❌ Urgent search cancelled.")
+        elif st == "done":
+            wiz_edit(mid, "✅ Urgent search set up, details in the message below.")
+        else:
+            wiz_edit(mid, *wiz_render(st))
+    return started
+
+
 # Small buttons under the "which urgent check?" message
 URGENT_CHOICES = json.dumps({"inline_keyboard": [
     [{"text": "🚨 All locations, any time", "callback_data": "start_all"}],
@@ -125,6 +309,7 @@ CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "star
 
 HELP = (
     "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events.\n"
+    "Urgent padel opens a 3-step menu: days ahead, weekdays, start times.\n"
     "While urgent mode is on you also get Stop, Pause and Extend.\n\n"
     "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
 )
@@ -217,7 +402,7 @@ def read_flag():
         return None
     since, pause, opts = None, None, []
     for w in words[1:]:
-        if w in ("evenings", "main"):
+        if w in ("evenings", "main") or w.split("=")[0] in ("days", "wd", "from", "to"):
             opts.append(w)
         elif w.startswith("pause="):
             try:
@@ -256,12 +441,33 @@ def set_urgent(on, opts=()):
     write_flag(on, opts, reset_state=True)
 
 
+def wd_text(mask):
+    days = [i for i, c in enumerate(mask) if c == "1"]
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    if len(days) == 7:
+        return "any day"
+    if len(days) > 1 and days == list(range(days[0], days[-1] + 1)):
+        return f"{names[days[0]]}-{names[days[-1]]}"
+    return ", ".join(names[i] for i in days)
+
+
 def opts_text(opts):
+    cfg = {w.split("=")[0]: w.split("=", 1)[1] for w in opts if "=" in w}
     parts = []
+    if "days" in cfg:
+        parts.append(f"next {cfg['days']} days")
+    if len(cfg.get("wd", "")) == 7:
+        parts.append(wd_text(cfg["wd"]))
+    if "from" in cfg or "to" in cfg:
+        first = int(cfg.get("from", 7))
+        last = int(cfg.get("to", 21))
+        parts.append(f"starts {first:02d}:00-{last:02d}:{'30' if last >= 21 else '00'}")
     if "evenings" in opts:
         parts.append("starts from 17:00 only")
     if "main" in opts:
         parts.append("main 4 locations only")
+    elif cfg:
+        parts.append("all locations")
     return " · ".join(parts) or "all locations, any time"
 
 
@@ -358,6 +564,10 @@ def read_commands():
             except Exception:  # noqa: BLE001
                 pass
             mid = (cb.get("message") or {}).get("message_id")
+            data = cb.get("data") or ""
+            if mid and data[:1] in WIZ_KINDS and (data == "x" or data[1:2] == ":"):
+                WIZ.append((mid, data))          # urgent menu: the message is redrawn after all taps are read
+                continue
             if mid:
                 try:   # remove the small buttons so they are not tapped twice
                     tg("editMessageReplyMarkup", chat_id=CHAT, message_id=mid,
@@ -579,7 +789,7 @@ def update_status(force=False, create=False):
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v9 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
+    print(f"tg_listen v10 · started {_now:%H:%M:%S} Vienna · status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
         print("Telegram secrets are missing.")
         sys.exit(3)
@@ -595,6 +805,8 @@ def main():
         return
     started_now = False
     failed = False
+    wiz_ops = list(WIZ)
+    WIZ.clear()
 
     for cmd in dict.fromkeys(cmds):  # each command once, in order
         try:
@@ -602,7 +814,7 @@ def main():
                 dispatch("report")
                 say("🔎 Checking all locations now. The answer follows in about 3 minutes.")
             elif cmd == "urgent":
-                say("🚨 Which urgent check? (next 3 days, 2h blocks, about every 5 minutes)", URGENT_CHOICES)
+                wiz_send_first()
             elif cmd in ("start_all", "start_evenings", "start_main"):
                 opts = {"start_all": [], "start_evenings": ["evenings"], "start_main": ["main"]}[cmd]
                 flag = read_flag()
@@ -662,8 +874,15 @@ def main():
             print(f"ERROR: could not handle '{cmd}' ({type(exc).__name__}).")
             say(f"⚠️ Could not run '{cmd}'. See the run log on GitHub.")
             failed = True
-    if other and not cmds:
+    if other and not cmds and not wiz_ops:
         say(HELP)
+    if wiz_ops:
+        try:
+            if wiz_run(wiz_ops):
+                started_now = True
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: urgent menu failed ({type(exc).__name__}).")
+            failed = True
 
     # Urgent mode upkeep: expire after 48 h, start a new check about every 5 minutes.
     flag = read_flag()
@@ -703,7 +922,7 @@ def main():
         check_token_reminder()
     except Exception as exc:  # noqa: BLE001
         print(f"WARNING: token reminder failed ({type(exc).__name__}).")
-    update_status(force=bool(cmds))
+    update_status(force=bool(cmds) or bool(wiz_ops))
     if failed:
         sys.exit(1)
 
