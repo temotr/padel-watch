@@ -40,10 +40,11 @@ jobs:
         run: python courts.py
 
       - name: Save snapshot
+        if: success() || failure()      # also after a failed check, so the "page looks different" counter is kept
         run: |
           git config user.name "watcher"
           git config user.email "watcher@users.noreply.github.com"
-          for f in courts_state.txt urgent_state.txt; do
+          for f in courts_state.txt urgent_state.txt health_courts.txt; do
             if [ -f "$f" ]; then git add "$f"; fi
           done
           if ! git diff --cached --quiet; then

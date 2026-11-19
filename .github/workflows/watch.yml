@@ -29,13 +29,19 @@ jobs:
 
       - name: Check page
         id: check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # only used to warn you when the page looks different
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python check.py
 
       - name: Save snapshot
+        if: success() || failure()      # also after a failed check, so the "page looks different" counter is kept
         run: |
           git config user.name "watcher"
           git config user.email "watcher@users.noreply.github.com"
-          git add events.txt
+          for f in events.txt health_sunset.txt; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if ! git diff --cached --quiet; then
             git commit -m "Update snapshot"
             for i in 1 2 3; do

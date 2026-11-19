@@ -42,10 +42,13 @@ jobs:
         run: python events_padel.py
 
       - name: Save state
+        if: success() || failure()      # also after a failed check, so the "page looks different" counter is kept
         run: |
           git config user.name "watcher"
           git config user.email "watcher@users.noreply.github.com"
-          git add padel_events_state.txt
+          for f in padel_events_state.txt health_events.txt; do
+            if [ -f "$f" ]; then git add "$f"; fi
+          done
           if ! git diff --cached --quiet; then
             git commit -m "Update Padel Austria events state"
             for i in 1 2 3; do

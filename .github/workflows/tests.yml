@@ -1,0 +1,47 @@
+name: Tests
+
+# Runs automatically every time you upload or change a file (about 1 minute).
+# Red cross in the Actions tab + a Telegram message = something you uploaded is broken.
+# It does not stop the watchers; it only tells you early (wrong file pasted, typing mistake in config.toml ...).
+on:
+  push:
+    paths-ignore:
+      - "**.txt"
+  workflow_dispatch:         # you can also start it by hand: Actions -> Tests -> Run workflow
+
+concurrency:
+  group: tests
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install checker
+        run: pip install pyyaml
+
+      - name: Check the files and run all tests
+        run: python run_tests.py
+
+      - name: Tell me on Telegram
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then exit 0; fi
+          curl -s -o /dev/null -w "Telegram HTTP %{http_code}\n" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "disable_web_page_preview=true" \
+            --data-urlencode "text=❌ PADEL WATCH · test failed after your upload"$'\n\n'"Upload: ${COMMIT_MSG:-manual run}"$'\n\n'"Open the red run to see which file is wrong: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
