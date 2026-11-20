@@ -14,11 +14,9 @@ from zoneinfo import ZoneInfo
 
 import watchlib as W
 
-# ==========================================
-# ⚠️ CHANGE THIS TO YOUR WISPBYTE URL
-# ==========================================
-WISPBYTE_URL = "http://78.154.103.34:15688"
-# ==========================================
+# WhatsApp bridge (Wispbyte server): address and key come from GitHub secrets, never from this public file.
+WISPBYTE_URL = os.environ.get("WISPBYTE_URL", "").strip().rstrip("/")
+WISPBYTE_KEY = os.environ.get("WISPBYTE_KEY", "").strip()
 
 WORKFLOW = "courts.yml"
 EVENTS_WORKFLOW = "padel_events.yml"
@@ -234,7 +232,7 @@ def wiz_start(st, first, last):
     if minutes >= 4:
         text += (f"\n⏱ One round takes about {minutes:.0f} minutes with this many days, so a message can come a "
                  "little later." + ("" if st["main"] else " 'Main 4 only' makes it about twice as fast."))
-    say(text + "\n\nButtons below: Pause · Extend · Stop")
+    say(text + "\n\nButtons below: Extend · Stop · Mute")
     return True
 
 def wiz_run(ops):
@@ -650,66 +648,31 @@ def meetup_text():
             out.append("   " + " · ".join(extra))
     return "\n".join(out)
 
-# ---- New Telegram Sync Deletion & Cleanup Logic ----
-TG_SENT_FILE = "tg_sent_messages.json"
+# ---- WhatsApp bridge: every request is signed with the shared key (the key itself is never sent) ----
+def wa_configured():
+    return bool(WISPBYTE_URL and WISPBYTE_KEY)
 
-def load_sent_messages():
-    if os.path.exists(TG_SENT_FILE):
-        try:
-            with open(TG_SENT_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+def wa_get(path, timeout=10):
+    """Reads a JSON answer from the bridge. The server deletes expired requests (48 h) itself."""
+    import hashlib, hmac
+    ts = str(int(time.time()))
+    sig = hmac.new(WISPBYTE_KEY.encode(), f"{ts}\n{path}".encode(), hashlib.sha256).hexdigest()
+    req = urllib.request.Request(WISPBYTE_URL + path,
+                                 headers={"User-Agent": "padel-watch", "x-ts": ts, "x-sig": sig})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
 
-def save_sent_messages(data):
-    with open(TG_SENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-def sync_deletions():
-    """Fetches active messages from Wispbyte and deletes them from TG if they are removed from WhatsApp OR older than 48 hours."""
-    try:
-        req = urllib.request.Request(f"{WISPBYTE_URL}/summary", headers={"User-Agent": "padel-watch"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            active_wa = json.loads(r.read().decode("utf-8"))
-    except Exception:
-        return 
-        
-    sent_tg = load_sent_messages()
-    changed = False
-    now_ts = time.time()
-    
-    # 1. Sync deletions (Message was deleted in WhatsApp)
-    for wa_id, tg_data in list(sent_tg.items()):
-        if wa_id not in active_wa:
-            tg_id = tg_data if isinstance(tg_data, int) else tg_data.get("tg_id")
-            try:
-                tg("deleteMessage", chat_id=CHAT, message_id=tg_id)
-                print(f"Deleted {tg_id} from TG (removed from WhatsApp).")
-            except Exception:
-                pass
-            del sent_tg[wa_id]
-            changed = True
-            
-    # 2. 48-Hour Cleanup (Message is older than 48h)
-    for wa_id, msg_data in active_wa.items():
-        timestamp = msg_data.get("timestamp", now_ts)
-        tg_id = msg_data.get("tgMessageId")
-        
-        if tg_id and (now_ts - timestamp > 48 * 3600):
-            try:
-                tg("deleteMessage", chat_id=CHAT, message_id=tg_id)
-                print(f"Deleted {tg_id} from TG (older than 48h).")
-            except Exception:
-                pass
-            if wa_id in sent_tg:
-                del sent_tg[wa_id]
-                changed = True
-                
-    if changed:
-        save_sent_messages(sent_tg)
-
-# ---------------------------------------------
+def wa_summary_text(data):
+    """Telegram HTML for the list of open requests. Everything from WhatsApp is escaped."""
+    out = ["🎾 <b>Active Padel Requests from WhatsApp</b>\n"]
+    for i, m in enumerate(data.values(), 1):
+        g = html.escape(str(m.get("group", "Unknown")))
+        link = str(m.get("link") or "")
+        if re.fullmatch(r"https://chat\.whatsapp\.com/[A-Za-z0-9]+", link):
+            g = f'<a href="{link}">{g}</a>'
+        out.append(f"<b>{i}. From {html.escape(str(m.get('sender', 'Unknown')))} ({g})</b>\n"
+                   f"<i>{html.escape(str(m.get('text', '')))}</i>\n\n---")
+    return "\n".join(out)
 
 def norm(text):
     text = re.sub(r"[^\w\s/+.-]", " ", (text or "").lower())
@@ -843,14 +806,14 @@ def build_status():
     
     # WHATSAPP STATUS SECTION
     lines += ["", "📱 <b>WHATSAPP (Wispbyte)</b>"]
-    try:
-        # Fetch from Wispbyte API instead of looking for a local file
-        req = urllib.request.Request(f"{WISPBYTE_URL}/status", headers={"User-Agent": "padel-watch"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            wa_data = json.loads(r.read().decode("utf-8"))
-        lines.append(f"✅ Status: {wa_data.get('status', 'online')} · {wa_data.get('activeGames', 0)} active requests")
-    except Exception:
-        lines.append("❌ Status: Wispbyte server unreachable")
+    if not wa_configured():
+        lines.append("⚪ Not connected (secrets WISPBYTE_URL / WISPBYTE_KEY missing)")
+    else:
+        try:
+            wa_data = wa_get("/status", timeout=5)
+            lines.append(f"✅ Status: {html.escape(str(wa_data.get('status', 'online')))} · {int(wa_data.get('activeGames', 0))} active requests")
+        except Exception:
+            lines.append("❌ Status: Wispbyte server unreachable or key wrong")
     # ------------------------
     # ------------------------
 
@@ -1008,40 +971,18 @@ def process(cmds, other):
             elif cmd == "mute":
                 mute_send_menu()
             elif cmd == "whatsapp_summary":
-                try:
-                    req = urllib.request.Request(f"{WISPBYTE_URL}/summary", headers={"User-Agent": "padel-watch"})
-                    with urllib.request.urlopen(req, timeout=10) as r:
-                        data = json.loads(r.read().decode("utf-8"))
-                        
-                    if not data:
-                        say("No active WhatsApp games found right now.")
-                    else:
-                        summary = "🎾 <b>Active Padel Requests from WhatsApp</b>\n\n"
-                        sent_tg = load_sent_messages()
-                        changed = False
-                        now_ts = time.time()
-                        
-                        for i, (key, m) in enumerate(data.items(), 1):
-                            g_name = m.get('group', 'Unknown')
-                            if m.get('link'):
-                                g_display = f"<a href='{m.get('link')}'>{g_name}</a>"
-                            else:
-                                g_display = g_name
-                            summary += f"<b>{i}. From {m.get('sender', 'Unknown')} ({g_display})</b>\n<i>{m.get('text', '')}</i>\n\n---\n"
-                            
-                            # Track it with a timestamp so we can clean it up later
-                            if key not in sent_tg and m.get('tgMessageId'):
-                                sent_tg[key] = {
-                                    "tg_id": m['tgMessageId'],
-                                    "ts": now_ts
-                                }
-                                changed = True
-                        say_html(summary)
-                        if changed:
-                            save_sent_messages(sent_tg)
-                except Exception as exc:
-                    print(f"WARNING: WhatsApp summary failed ({type(exc).__name__}).")
-                    say("❌ Could not reach the WhatsApp Wispbyte server. Is it online?")
+                if not wa_configured():
+                    say("⚪ WhatsApp bridge is not connected (secrets WISPBYTE_URL / WISPBYTE_KEY missing).")
+                else:
+                    try:
+                        data = wa_get("/summary")
+                        if not data:
+                            say("No active WhatsApp games found right now.")
+                        else:
+                            say_html(wa_summary_text(data))
+                    except Exception as exc:
+                        print(f"WARNING: WhatsApp summary failed ({type(exc).__name__}).")
+                        say("❌ Could not reach the WhatsApp server (offline, or the key does not match).")
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments...")
@@ -1125,7 +1066,6 @@ def main():
             continue
         if first or cmds or other or WIZ:
             failed = process(cmds, other) or failed
-            sync_deletions() # <-- Syncs deletions and 48h cleanup
         first = False
         if time.time() >= deadline - 1:
             break
