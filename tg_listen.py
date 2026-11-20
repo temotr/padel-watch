@@ -844,14 +844,14 @@ def build_status():
     # WHATSAPP STATUS SECTION
     lines += ["", "📱 <b>WHATSAPP (Wispbyte)</b>"]
     try:
-        if os.path.exists("wa_messages.json"):
-            with open("wa_messages.json", "r", encoding="utf-8") as f:
-                wa_data = json.load(f)
-            lines.append(f"✅ Status: online · {len(wa_data)} active requests")
-        else:
-            lines.append("✅ Status: online")
+        # Fetch from Wispbyte API instead of looking for a local file
+        req = urllib.request.Request(f"{WISPBYTE_URL}/status", headers={"User-Agent": "padel-watch"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            wa_data = json.loads(r.read().decode("utf-8"))
+        lines.append(f"✅ Status: {wa_data.get('status', 'online')} · {wa_data.get('activeGames', 0)} active requests")
     except Exception:
-        lines.append("❌ Status: Error reading WhatsApp data file")
+        lines.append("❌ Status: Wispbyte server unreachable")
+    # ------------------------
     # ------------------------
 
     lines.append(meetup_status_line(mutes, now))
