@@ -663,25 +663,9 @@ def wa_get(path, timeout=10):
         return json.loads(r.read().decode("utf-8"))
 
 def wa_summary_text(data):
-    """Telegram HTML for the list of open requests. Everything from WhatsApp is escaped."""
-    def group_html(name, link):
-        g = html.escape(str(name or "Unknown"))
-        link = str(link or "")
-        if re.fullmatch(r"https://chat\.whatsapp\.com/[A-Za-z0-9]+", link):
-            g = f'<a href="{link}">{g}</a>'
-        return g
-
-    out = ["🎾 <b>Active Padel Requests from WhatsApp</b>\n"]
-    for i, m in enumerate(data.values(), 1):
-        g = group_html(m.get("group"), m.get("link"))
-        also = [group_html(a.get("name"), a.get("link")) for a in (m.get("also") or []) if isinstance(a, dict)]
-        if also:
-            g += " + " + ", ".join(also)
-        if m.get("queued"):
-            g += " · 🌙 waiting for the morning digest"
-        out.append(f"<b>{i}. From {html.escape(str(m.get('sender', 'Unknown')))} ({g})</b>\n"
-                   f"<i>{html.escape(str(m.get('text', '')))}</i>\n\n---")
-    return "\n".join(out)
+    """Telegram HTML for the open requests (see wa_format.py). Everything from WhatsApp is escaped."""
+    import wa_format
+    return wa_format.wa_summary(data)
 
 def norm(text):
     text = re.sub(r"[^\w\s/+.-]", " ", (text or "").lower())
