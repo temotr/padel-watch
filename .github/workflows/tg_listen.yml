@@ -14,6 +14,7 @@ permissions:
 jobs:
   listen:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -23,4 +24,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ github.token }}
           MEETUP_EVENTS_URL: ${{ secrets.MEETUP_EVENTS_URL }}
+          WISPBYTE_URL: ${{ secrets.WISPBYTE_URL }}
+          WISPBYTE_KEY: ${{ secrets.WISPBYTE_KEY }}
         run: python3 tg_listen.py
