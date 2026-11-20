@@ -17,7 +17,7 @@ import watchlib as W
 # ==========================================
 # ⚠️ CHANGE THIS TO YOUR WISPBYTE URL
 # ==========================================
-WISPBYTE_URL = "http://78.154.103.34:15688/summary"
+WISPBYTE_URL = "http://78.154.103.34:15688"
 # ==========================================
 
 WORKFLOW = "courts.yml"
