@@ -929,6 +929,9 @@ def update_status(force=False, create=False):
         except Exception:
             pass
             
+    except (TimeoutError, urllib.error.URLError, ConnectionError, OSError) as exc:
+        # A slow or unreachable network is temporary: the next refresh tries again, no message to you.
+        print(f"WARNING: status not updated this time, network problem ({type(exc).__name__}).")
     except Exception as exc:
         print(f"❌ CRITICAL STATUS ERROR: {type(exc).__name__} - {exc}")
         # Send a fallback error message so you see it in Telegram
