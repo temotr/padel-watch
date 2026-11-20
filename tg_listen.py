@@ -896,43 +896,49 @@ def update_status(force=False, create=False):
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
     if not force and now.minute % STATUS_EVERY_MIN > 1:
         return
+        
     try:
         text = build_status()
-        mid = pinned_status_id()
-        if not mid:
-            try:
-                mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
-            except (OSError, ValueError):
-                pass
-                
-        if mid:
-            try:
-                tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
-                   disable_web_page_preview="true", parse_mode="HTML")
-                return
-            except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
-                low = body.lower()
-                if "not modified" in low:
-                    return
-                # If the message was deleted, we MUST create a new one, even if create=False
-                if "not found" in low or "invalid" in low or "can't be edited" in low:
-                    print("STATUS: old message was deleted. Creating a new one...")
-                    create = True # Force creation
-                else:
-                    return # Temporary error, don't create a duplicate
+        
+        # If manually requested, force creation
+        if create:
+            mid = None
+            create = True
+        else:
+            mid = pinned_status_id()
+            if not mid:
+                try:
+                    mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
+                except (OSError, ValueError):
+                    pass
                     
+            if mid:
+                try:
+                    tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
+                       disable_web_page_preview="true", parse_mode="HTML")
+                    return
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
+                    low = body.lower()
+                    if "not modified" in low:
+                        return
+                    if "not found" in low or "invalid" in low or "can't be edited" in low:
+                        create = True # The old message is gone, create a new one
+                    else:
+                        return # Temporary error
+                        
         if not mid and not create:
             return
             
         # Create a new message
+        print("STATUS: Creating a new status message...")
         res = tg("sendMessage", chat_id=CHAT, text=text, disable_web_page_preview="true", parse_mode="HTML")
         mid = res["result"]["message_id"]
         
         try:
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
-        except Exception:
-            pass
+        except Exception as pin_exc:
+            print(f"WARNING: Could not pin message: {pin_exc}")
             
         with open(STATUS_FILE, "w", encoding="utf-8") as f:
             f.write(f"{mid}\n")
@@ -943,7 +949,12 @@ def update_status(force=False, create=False):
             pass
             
     except Exception as exc:
-        print(f"WARNING: status update failed ({type(exc).__name__}).")
+        print(f"❌ CRITICAL STATUS ERROR: {type(exc).__name__} - {exc}")
+        # Send a fallback error message so you see it in Telegram
+        try:
+            tg("sendMessage", chat_id=CHAT, text=f"⚠️ Status generation failed. Check GitHub logs for: {type(exc).__name__}")
+        except:
+            pass
 
 def process(cmds, other):
     started_now = False
