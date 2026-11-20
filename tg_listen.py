@@ -17,7 +17,7 @@ import watchlib as W
 # ==========================================
 # ⚠️ CHANGE THIS TO YOUR WISPBYTE URL
 # ==========================================
-WISPBYTE_URL = "http://78.154.103.34:15688"
+WISPBYTE_URL = "http://YOUR_WISPBYTE_IP:PORT"
 # ==========================================
 
 WORKFLOW = "courts.yml"
@@ -650,8 +650,9 @@ def meetup_text():
             out.append("   " + " · ".join(extra))
     return "\n".join(out)
 
-# ---- New Telegram Sync Deletion Logic ----
+# ---- New Telegram Sync Deletion & Cleanup Logic ----
 TG_SENT_FILE = "tg_sent_messages.json"
+
 def load_sent_messages():
     if os.path.exists(TG_SENT_FILE):
         try:
@@ -666,6 +667,7 @@ def save_sent_messages(data):
         json.dump(data, f, indent=2)
 
 def sync_deletions():
+    """Fetches active messages from Wispbyte and deletes them from TG if they are removed from WhatsApp OR older than 48 hours."""
     try:
         req = urllib.request.Request(f"{WISPBYTE_URL}/summary", headers={"User-Agent": "padel-watch"})
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -675,17 +677,35 @@ def sync_deletions():
         
     sent_tg = load_sent_messages()
     changed = False
+    now_ts = time.time()
     
-    for wa_id, tg_msg_id in list(sent_tg.items()):
+    # 1. Sync deletions (Message was deleted in WhatsApp)
+    for wa_id, tg_data in list(sent_tg.items()):
         if wa_id not in active_wa:
+            tg_id = tg_data if isinstance(tg_data, int) else tg_data.get("tg_id")
             try:
-                tg("deleteMessage", chat_id=CHAT, message_id=tg_msg_id)
-                print(f"Deleted message {tg_msg_id} from Telegram (removed from WhatsApp).")
-            except Exception as e:
+                tg("deleteMessage", chat_id=CHAT, message_id=tg_id)
+                print(f"Deleted {tg_id} from TG (removed from WhatsApp).")
+            except Exception:
                 pass
             del sent_tg[wa_id]
             changed = True
             
+    # 2. 48-Hour Cleanup (Message is older than 48h)
+    for wa_id, msg_data in active_wa.items():
+        timestamp = msg_data.get("timestamp", now_ts)
+        tg_id = msg_data.get("tgMessageId")
+        
+        if tg_id and (now_ts - timestamp > 48 * 3600):
+            try:
+                tg("deleteMessage", chat_id=CHAT, message_id=tg_id)
+                print(f"Deleted {tg_id} from TG (older than 48h).")
+            except Exception:
+                pass
+            if wa_id in sent_tg:
+                del sent_tg[wa_id]
+                changed = True
+                
     if changed:
         save_sent_messages(sent_tg)
 
@@ -824,12 +844,14 @@ def build_status():
     # WHATSAPP STATUS SECTION
     lines += ["", "📱 <b>WHATSAPP (Wispbyte)</b>"]
     try:
-        req = urllib.request.Request(f"{WISPBYTE_URL}/status", headers={"User-Agent": "padel-watch"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            wa_data = json.loads(r.read().decode("utf-8"))
-        lines.append(f"✅ Status: {wa_data.get('status', 'unknown')} · {wa_data.get('activeGames', 0)} active requests")
+        if os.path.exists("wa_messages.json"):
+            with open("wa_messages.json", "r", encoding="utf-8") as f:
+                wa_data = json.load(f)
+            lines.append(f"✅ Status: online · {len(wa_data)} active requests")
+        else:
+            lines.append("✅ Status: online")
     except Exception:
-        lines.append("❌ Status: Server unreachable (Wispbyte might be offline)")
+        lines.append("❌ Status: Error reading WhatsApp data file")
     # ------------------------
 
     lines.append(meetup_status_line(mutes, now))
@@ -977,6 +999,8 @@ def process(cmds, other):
                         summary = "🎾 <b>Active Padel Requests from WhatsApp</b>\n\n"
                         sent_tg = load_sent_messages()
                         changed = False
+                        now_ts = time.time()
+                        
                         for i, (key, m) in enumerate(data.items(), 1):
                             g_name = m.get('group', 'Unknown')
                             if m.get('link'):
@@ -984,8 +1008,13 @@ def process(cmds, other):
                             else:
                                 g_display = g_name
                             summary += f"<b>{i}. From {m.get('sender', 'Unknown')} ({g_display})</b>\n<i>{m.get('text', '')}</i>\n\n---\n"
+                            
+                            # Track it with a timestamp so we can clean it up later
                             if key not in sent_tg and m.get('tgMessageId'):
-                                sent_tg[key] = m['tgMessageId']
+                                sent_tg[key] = {
+                                    "tg_id": m['tgMessageId'],
+                                    "ts": now_ts
+                                }
                                 changed = True
                         say_html(summary)
                         if changed:
@@ -1076,7 +1105,7 @@ def main():
             continue
         if first or cmds or other or WIZ:
             failed = process(cmds, other) or failed
-            sync_deletions() # <-- THIS NOW RUNS ON EVERY CYCLE
+            sync_deletions() # <-- Syncs deletions and 48h cleanup
         first = False
         if time.time() >= deadline - 1:
             break
