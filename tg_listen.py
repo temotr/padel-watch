@@ -1,14 +1,8 @@
+
 """Telegram remote control for the Padeldome court check.
 
 Run every minute (cron-job.org -> workflow_dispatch). Only messages from your own
 chat (TELEGRAM_CHAT_ID) are accepted.
-
-Buttons:   Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events
-           ("Urgent padel" asks which urgent check; while urgent is on: Stop, Pause, Extend)
-Typed words (see HELP below): stop, pause, extend, evenings, main 4, sun set, help
-
-Urgent mode is remembered in the repo file urgent.txt:
-  "off"  or  "on <time> [evenings] [main] [pause=<time>]"
 """
 import datetime as dt
 import html
@@ -25,6 +19,12 @@ from zoneinfo import ZoneInfo
 
 import watchlib as W
 
+# ==========================================
+# ⚠️ CHANGE THIS TO YOUR WISPBYTE URL
+# ==========================================
+WISPBYTE_URL = "http://78.154.103.34:15688/summary"
+# ==========================================
+
 WORKFLOW = "courts.yml"
 EVENTS_WORKFLOW = "padel_events.yml"
 FLAG = "urgent.txt"
@@ -38,19 +38,18 @@ URGENT_MAX_HOURS = W.get("urgent", "max_hours", 48)     # urgent mode switches i
 PAUSE_HOURS = W.get("urgent", "pause_hours", 2)
 EVENTS_FILE = "events.txt"
 STATUS_FILE = "status_msg.txt"   # id of the pinned status message
-# GitHub token that cron-job.org uses to start the workflows. Change the date after you renew it.
+
 def _date(text, default):
     try:
         return dt.date.fromisoformat(text)
     except ValueError:
         return default
 
-
 TOKEN_EXPIRES = _date(W.get("bot", "token_expires", "2026-12-12"), dt.date(2026, 12, 12))
 REMIND_DAYS = tuple(n for n in W.get("bot", "remind_days", [14, 7, 3, 1, 0]) if isinstance(n, int))  # at 09:00 Vienna time, this many days before
 REMINDERS_FILE = "reminders.txt"  # remembers which reminders were already sent
 STATUS_EVERY_MIN = W.get("bot", "status_every_min", 5)   # the status message is refreshed about every 5 minutes
-# (label, workflow file, how old the last success may be before it is shown as a warning)
+
 WATCHERS = [
     ("📅 Sun Set events", "watch.yml", 45),
     ("🎾 Court checks", "courts.yml", None),          # urgent runs: checked separately below
@@ -92,6 +91,7 @@ COMMANDS = {
     "padel-austria tournaments": "padel_events",
     "padel austria events": "padel_events",
     "stop urgent check": "stop",
+    "whatsapp summary": "whatsapp_summary", # <-- NEW
     # short words you can type
     "pause": "pause",
     "extend": "extend",
@@ -119,17 +119,18 @@ COMMANDS = {
 
 # Buttons that stay at the bottom of the chat; tapping one sends its text.
 def keyboard():
-    """Bottom buttons. Urgent off: 4 buttons. Urgent on: Stop, Pause and Extend appear."""
+    """Bottom buttons. Urgent off: normal buttons. Urgent on: Stop, Pause and Extend appear."""
     flag = read_flag()
     if not flag:
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["🚨 Urgent padel", "📅 Sun Set events"],
-                ["🤝 Meetup events", "🔕 Mute"]]
+                ["🤝 Meetup events", "📱 WhatsApp Summary"], # <-- NEW BUTTON
+                ["🔕 Mute"]]
     else:
         rows = [["🎾 Check all options", "🏆 Padel-Austria tournaments"],
                 ["📅 Sun Set events", "🛑 Stop urgent check"],
                 ["⏱ Extend urgent +48h", "🔕 Mute"],
-                ["🤝 Meetup events"]]
+                ["🤝 Meetup events", "📱 WhatsApp Summary"]] # <-- NEW BUTTON
     return json.dumps({
         "keyboard": [[{"text": t} for t in row] for row in rows],
         "resize_keyboard": True,
@@ -1036,6 +1037,22 @@ def process(cmds, other):
                 say_html(meetup_text())
             elif cmd == "mute":
                 mute_send_menu()
+            elif cmd == "whatsapp_summary": # <-- NEW HANDLER
+                try:
+                    req = urllib.request.Request(WISPBYTE_URL, headers={"User-Agent": "padel-watch"})
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                        
+                    if not data:
+                        say("No active WhatsApp games found right now.")
+                    else:
+                        summary = "🎾 <b>ACTIVE WHATSAPP REQUESTS</b>\n\n"
+                        for i, (key, m) in enumerate(data.items(), 1):
+                            summary += f"<b>{i}. From {m.get('sender', 'Unknown')} ({m.get('group', 'Unknown')})</b>\n{m.get('text', '')}\n\n---\n"
+                        say_html(summary)
+                except Exception as exc:
+                    print(f"WARNING: WhatsApp summary failed ({type(exc).__name__}).")
+                    say("❌ Could not reach the WhatsApp Wispbyte server. Is it online?")
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
                 say("🏆 Reading the Padel-Austria tournaments "
