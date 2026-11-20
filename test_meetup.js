@@ -75,6 +75,7 @@ api.checkMeetup();
 ok(sent.length === before && !("ev_300111222" in store), "past event ignored (no alert, not stored)");
 const rows = api.doGet({ parameter: { key: store.MEETUP_KEY || "" } });
 store.MEETUP_KEY = "k1"; const out = api.doGet({ parameter: { key: "k1" } }).text; console.log(out);
+ok(/^# v1 checked=\d{4}-\d\d-\d\dT\S+ changed=\d{4}-\d\d-\d\dT\S+\n/.test(out), "list header carries time of last check and last change: " + out.split("\n")[0]);
 ok(out.startsWith("# v1") && out.includes("2099-02-12|19:00|Afterwork Indoor Padel at Padelzone Floridsdorf|Padelzone Floridsdorf|€20.00|13|https://"), "overview list output");
 
 // forwarded old mail: test function sends it even though the event is long over

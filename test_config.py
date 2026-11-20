@@ -15,8 +15,8 @@ print(json.dumps({
  "maxw": C.MAX_WINDOWS, "minslots": C.MIN_SLOTS_READ, "ud": C.URGENT_DAYS, "uf": C.URGENT_FIRST, "ul": C.URGENT_LAST,
  "states": sorted(E.STATES), "levels": sorted(E.LEVELS), "kinds": sorted(E.KINDS), "eve": E.EVENING_FROM, "pages": E.MAX_PAGES,
  "cond": E.CONDITION_LINES,
- "every": L.URGENT_EVERY_SEC, "maxh": L.URGENT_MAX_HOURS, "pause": L.PAUSE_HOURS, "tok": str(L.TOKEN_EXPIRES),
- "remind": list(L.REMIND_DAYS), "st": L.STATUS_EVERY_MIN, "q": [L.QUIET_FROM, L.QUIET_TO], "mute": L.MUTE_HOURS}))
+ "every": L.URGENT_EVERY_SEC, "backoff": L.URGENT_BACKOFF_SEC, "maxh": L.URGENT_MAX_HOURS, "pause": L.PAUSE_HOURS, "tok": str(L.TOKEN_EXPIRES),
+ "remind": list(L.REMIND_DAYS), "st": L.STATUS_EVERY_MIN, "q": [L.QUIET_FROM, L.QUIET_TO], "mute": L.MUTE_HOURS, "cad": L.CADENCE}))
 """ % HERE
 def probe(config_path):
     env = dict(os.environ, PADEL_CONFIG=config_path, TELEGRAM_BOT_TOKEN="t", TELEGRAM_CHAT_ID="1")

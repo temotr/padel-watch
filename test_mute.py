@@ -67,7 +67,7 @@ check("events" not in mutes and "meetup" not in mutes, "other watchers stay on")
 st = L.build_status.__code__ is not None
 L.run_times = lambda wf: (dt.datetime.now(dt.timezone.utc), False)
 text = L.build_status()
-check("🔕 📅 Sun Set events: muted until" in text, "status shows the mute on the watcher line")
+check("🔕 📅 Sun Set events (every 5 min): muted until" in text, "status shows the mute on the watcher line")
 check("🏆 Padel-Austria tournaments: ✅" in text or "✅ 🏆 Padel-Austria tournaments" in text, "other watchers unchanged in status")
 
 # menu now offers unmute

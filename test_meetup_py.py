@@ -19,4 +19,21 @@ mode["body"] = "forbidden"; assert "did not answer correctly" in t.meetup_text()
 mode["body"] = "# v1\n"; assert "No upcoming padel events" in t.meetup_text()
 t.MEETUP_URL = ""; assert "not connected" in t.meetup_text()
 assert t.COMMANDS["meetup events"] == "meetup" and "Meetup" in t.keyboard()
+# status line
+t.MEETUP_URL = os.environ["MEETUP_EVENTS_URL"]
+import datetime as dt
+now = dt.datetime.now(dt.timezone.utc)
+iso = lambda d: d.isoformat(timespec="seconds")
+mode["body"] = f"# v1 checked={iso(now - dt.timedelta(minutes=3))} changed={iso(now - dt.timedelta(days=1))}\n"
+line = t.meetup_status_line({}, now)
+print(line); assert line.startswith("✅ 🤝 Meetup events (every 5 min): last check") and "change" not in line
+mode["body"] = f"# v1 checked={iso(now - dt.timedelta(minutes=3))} changed=-\n"
+assert t.meetup_status_line({}, now).endswith("last check " + t.stamp(now - dt.timedelta(minutes=3)))
+mode["body"] = f"# v1 checked={iso(now - dt.timedelta(minutes=45))} changed=-\n"
+assert t.meetup_status_line({}, now).startswith("⚠️") and "no recent check" in t.meetup_status_line({}, now)
+mode["body"] = "# v1\n"
+assert "update the Google script" in t.meetup_status_line({}, now)
+mode["body"] = "forbidden"; assert t.meetup_status_line({}, now).startswith("❓")
+assert t.meetup_status_line({"meetup": now + dt.timedelta(hours=2)}, now).startswith("🔕")
+t.MEETUP_URL = ""; assert "not connected yet" in t.meetup_status_line({}, now)
 print("ALL OK")

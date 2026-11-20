@@ -86,6 +86,7 @@ check(any("can be read again" in m for m in msgs) and open("health_sunset.txt").
 
 # ---- end to end: courts.py when no location can be read
 import courts as C
+C.diagnose = lambda url: None        # the tests never touch the real website
 os.chdir(tempfile.mkdtemp())
 C.time.sleep = lambda s: None
 def no_page(page, url): raise RuntimeError("blocked")
@@ -107,5 +108,51 @@ for i in range(2):
     except SystemExit:
         pass
     check(len(msgs) == (0 if i == 0 else 1), f"automatic run {i + 1}: warning only after the 2nd failure")
+
+# ---- courts.py when every website times out: stops early and says so
+os.chdir(tempfile.mkdtemp())
+calls = []
+def timeouts(page, url):
+    calls.append(url); raise RuntimeError("Page.goto: Timeout 30000ms exceeded.\nCall log:\n - navigating")
+C.fetch_day = timeouts
+msgs.clear()
+os.environ["MODE"] = "urgent"
+open("urgent.txt", "w").write("on 2026-11-19T10:00:00+00:00 days=4\n")
+C.URGENT_FLAG = C.pathlib.Path("urgent.txt")
+try:
+    C.run_all(None, now=dt.datetime(2026, 11, 19, 12, 0, tzinfo=C.TZ))
+    check(False, "must stop when nothing answers")
+except SystemExit as e:
+    check(e.code == 2, "timeouts: exit code 2")
+n_loc = len(C.LOCATIONS) + len(C.FAR_LOCATIONS)
+check(len(calls) <= 6, f"timeouts: gave up after {len(calls)} page loads instead of {n_loc * 4} (2 per location, 3 locations)")
+check("did not answer" in open("health_courts.txt").read(), "timeouts: reason says the website did not answer")
+os.environ["MODE"] = ""
+
+# ---- fetch_day: a page that never goes quiet is still read; a real connection failure is not
+import importlib
+C2 = importlib.reload(C)
+class FakePage:
+    def __init__(self, goto_error=None): self.err, self.log = goto_error, []
+    def goto(self, url, wait_until=None):
+        if self.err: raise self.err
+    def wait_for_selector(self, sel, timeout=0): self.log.append("selector")
+    def wait_for_timeout(self, ms): pass
+    def evaluate(self, js): return {"ok": True}
+p = FakePage(RuntimeError("Page.goto: Timeout 30000ms exceeded.\nCall log:"))
+check(C2.fetch_day(p, "u") == {"ok": True} and p.log == ["selector"], "never-quiet page: read anyway")
+try:
+    C2.fetch_day(FakePage(RuntimeError("Page.goto: net::ERR_CONNECTION_TIMED_OUT at https://x")), "u"); check(False, "connection failure must raise")
+except RuntimeError:
+    check(True, "connection failure still raises")
+class NoSelector(FakePage):
+    def wait_for_selector(self, sel, timeout=0): raise RuntimeError("Timeout 20000ms exceeded waiting for selector")
+try:
+    C2.fetch_day(NoSelector(RuntimeError("Page.goto: Timeout 30000ms exceeded.")), "u"); check(False, "no court list must raise")
+except RuntimeError:
+    check(C2.is_network_error(RuntimeError("Timeout 20000ms exceeded waiting for selector")), "no court list after a timeout: raises, counted as no answer")
+C2.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(OSError("blocked"))
+C2.diagnose("https://example.invalid/")      # must print a line and never raise
+check(True, "diagnose never raises")
 print("FAILED:", fails) if fails else print("ALL OK")
 sys.exit(1 if fails else 0)

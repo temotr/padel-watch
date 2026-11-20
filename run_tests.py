@@ -91,6 +91,8 @@ if os.path.exists("meetup_to_telegram.gs") and node:
 tests = [[sys.executable, t] for t in sorted(glob.glob("test_*.py"))]
 if node and os.path.exists("test_meetup.js") and os.path.exists("meetup_to_telegram.gs"):
     tests.append([node, "test_meetup.js"])
+if node and os.path.exists("whatsapp_server/test_wa_server.js"):
+    tests.append([node, "whatsapp_server/test_wa_server.js"])
 for cmd in tests:
     name = cmd[1]
     try:
