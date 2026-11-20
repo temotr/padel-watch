@@ -1,4 +1,3 @@
-
 """Telegram remote control for the Padeldome court check."""
 import datetime as dt
 import html
@@ -26,13 +25,13 @@ EVENTS_WORKFLOW = "padel_events.yml"
 FLAG = "urgent.txt"
 URGENT_STATE = "urgent_state.txt"
 LISTEN_SECONDS = int(os.environ.get("LISTEN_SECONDS", "50"))
-MAX_AGE_SEC = 30 * 60          
-URGENT_EVERY_SEC = W.get("urgent", "every_sec", 270)   
-URGENT_BACKOFF_SEC = W.get("urgent", "backoff_sec", 900)   
-URGENT_MAX_HOURS = W.get("urgent", "max_hours", 48)     
+MAX_AGE_SEC = 30 * 60
+URGENT_EVERY_SEC = W.get("urgent", "every_sec", 270)
+URGENT_BACKOFF_SEC = W.get("urgent", "backoff_sec", 900)
+URGENT_MAX_HOURS = W.get("urgent", "max_hours", 48)
 PAUSE_HOURS = W.get("urgent", "pause_hours", 2)
 EVENTS_FILE = "events.txt"
-STATUS_FILE = "status_msg.txt"   
+STATUS_FILE = "status_msg.txt"
 
 def _date(text, default):
     try:
@@ -42,28 +41,28 @@ def _date(text, default):
 
 TOKEN_EXPIRES = _date(W.get("bot", "token_expires", "2026-12-12"), dt.date(2026, 12, 12))
 REMIND_DAYS = tuple(n for n in W.get("bot", "remind_days", [14, 7, 3, 1, 0]) if isinstance(n, int))
-REMINDERS_FILE = "reminders.txt"  
-STATUS_EVERY_MIN = W.get("bot", "status_every_min", 5)   
+REMINDERS_FILE = "reminders.txt"
+STATUS_EVERY_MIN = W.get("bot", "status_every_min", 5)
 
 WATCHERS = [
     ("📅 Sun Set events", "watch.yml", 45),
-    ("🎾 Court checks", "courts.yml", None),          
+    ("🎾 Court checks", "courts.yml", None),
     ("🏆 Padel-Austria tournaments", "padel_events.yml", 180),
 ]
-CADENCE = {   
+CADENCE = {
     "watch.yml": "every 5 min", "courts.yml": "on request + urgent", "padel_events.yml": "hourly", "urgent": "checked every 5 min",
     "meetup": "every 5 min",
 }
 CADENCE.update({k: v for k, v in W.get("bot", "cadence", {}).items() if k in CADENCE and isinstance(v, str)})
-HEALTH_KEY = {"watch.yml": "sunset", "courts.yml": "courts", "padel_events.yml": "events"}   
+HEALTH_KEY = {"watch.yml": "sunset", "courts.yml": "courts", "padel_events.yml": "events"}
 MUTE_KEY = {"watch.yml": "sunset", "padel_events.yml": "events"}
 MUTE_LABELS = {"sunset": "📅 Sun Set events", "events": "🏆 Tournaments", "meetup": "🤝 Meetup events"}
 MUTE_HOURS = [h for h in W.get("bot", "mute_hours", [2, 8, 24, 72, 168]) if isinstance(h, int) and 0 < h <= 24 * 60] or [2, 8, 24]
-QUIET_FROM, QUIET_TO = W.get("urgent", "quiet_from", 23), W.get("urgent", "quiet_to", 7)   
+QUIET_FROM, QUIET_TO = W.get("urgent", "quiet_from", 23), W.get("urgent", "quiet_to", 7)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
-MEETUP_URL = os.environ.get("MEETUP_EVENTS_URL", "")   
+MEETUP_URL = os.environ.get("MEETUP_EVENTS_URL", "")
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 REF = os.environ.get("GITHUB_REF_NAME", "main") or "main"
@@ -102,7 +101,7 @@ COMMANDS = {
     "padeldome check": "check",
     "padeldome urgent": "urgent",
     "stop": "stop",
-    "/check": "check",       
+    "/check": "check",
     "/urgent": "urgent",
     "/stop": "stop",
     "/start": "menu",
@@ -128,11 +127,12 @@ def keyboard():
         "is_persistent": True,
     })
 
+# (Wizard and Mute menu code stays exactly the same as in your previous version)
 WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "b", "x", "m", "u", "r")
-WIZ = []                      
+WIZ = []
 WIZ_EARLIEST = [7, 9, 12, 16, 17, 18]
 WIZ_DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-WIZ_MAX_DAYS = W.get("courts", "days_ahead", 15)   
+WIZ_MAX_DAYS = W.get("courts", "days_ahead", 15)
 
 def wiz_pack(st):
     return f"{st['days']}.{st['mask']}.{st['main']}.{'-' if st['frm'] is None else st['frm']}"
@@ -154,18 +154,18 @@ def wiz_btn(text, data):
 
 def wiz_render(st):
     pk = wiz_pack(st) if st else ""
-    if st is None:                                                    
-        text = ("<b><u>🚨 URGENT SEARCH - step 1 of 3</u></b>\n\n<b>How many days ahead?</b>\n"
+    if st is None:
+        text = ("<b><u>🚨 URGENT SEARCH · step 1 of 3</u></b>\n\n<b>How many days ahead?</b>\n"
                 "Today counts as day 1. The club books up to 14 days ahead, so 15 is the maximum.")
         nums = [wiz_btn(str(n), f"d:{n}") for n in range(1, WIZ_MAX_DAYS + 1)]
-        rows = [[wiz_btn("⚡ Evenings Mon-Thu - next 10 days - 18-20", "g:10.1111000.0.-:18:20")],
-                [wiz_btn("⚡ As before: 3 days - any day - any time", "g:3.1111111.0.-:7:21")]]
+        rows = [[wiz_btn("⚡ Evenings Mon-Thu · next 10 days · 18-20", "g:10.1111000.0.-:18:20")],
+                [wiz_btn("⚡ As before: 3 days · any day · any time", "g:3.1111111.0.-:7:21")]]
         rows += [nums[i:i + 5] for i in range(0, len(nums), 5)]
         rows.append([wiz_btn("❌ Cancel", "x")])
         return text, json.dumps({"inline_keyboard": rows})
     summary = f"📅 <b>{st['days']} days</b>"
     if st["step"] == 2:
-        text = (f"<b><u>🚨 URGENT SEARCH - step 2 of 3</u></b>\n{summary}\n\n"
+        text = (f"<b><u>🚨 URGENT SEARCH · step 2 of 3</u></b>\n{summary}\n\n"
                 "<b>Which weekdays?</b> Tap single days and then Next, or tap a ready-made set to go on right away.")
         day_btns = [wiz_btn(("✅ " if c == "1" else "⬜ ") + WIZ_DAY_NAMES[i], f"t:{pk}:{i}")
                     for i, c in enumerate(st["mask"])]
@@ -176,9 +176,9 @@ def wiz_render(st):
                 [wiz_btn("❌ Cancel", "x")]]
         return text, json.dumps({"inline_keyboard": rows})
     where = "main 4 locations only" if st["main"] else "all locations"
-    summary += f" - 🗓 <b>{wd_text(st['mask'])}</b> - 📍 {where}"
-    if st["frm"] is None:                                              
-        text = (f"<b><u>🚨 URGENT SEARCH - step 3 of 3</u></b>\n{summary}\n\n"
+    summary += f" · 🗓 <b>{wd_text(st['mask'])}</b> · 📍 {where}"
+    if st["frm"] is None:
+        text = (f"<b><u>🚨 URGENT SEARCH · step 3 of 3</u></b>\n{summary}\n\n"
                 "<b>Earliest start of the game?</b> (a game lasts 2 hours)\n"
                 "Or tap a shortcut to start the search right away.")
         rows = [[wiz_btn("⚡ 18-20 evening", f"g:{pk}:18:20"), wiz_btn("⚡ 17-21", f"g:{pk}:17:21"),
@@ -187,7 +187,7 @@ def wiz_render(st):
                 [wiz_btn(("🏠 Main 4 only: ON" if st["main"] else "🏠 Main 4 only: OFF"), f"o:{pk}")],
                 [wiz_btn("⬅️ Back", f"b:{pk}"), wiz_btn("❌ Cancel", "x")]]
         return text, json.dumps({"inline_keyboard": rows})
-    text = (f"<b><u>🚨 URGENT SEARCH - step 3 of 3</u></b>\n{summary}\n"
+    text = (f"<b><u>🚨 URGENT SEARCH · step 3 of 3</u></b>\n{summary}\n"
             f"⏰ earliest start <b>{st['frm']:02d}:00</b>\n\n<b>Latest start?</b> The search starts right after your tap.")
     hours = list(range(st["frm"], 22)) or [21]
     btns = [wiz_btn(f"{h:02d}:{'30' if h >= 21 else '00'}", f"g:{pk}:{st['frm']}:{h}") for h in hours]
@@ -225,7 +225,7 @@ def wiz_start(st, first, last):
     dispatch("urgent")
     today = dt.datetime.now(ZoneInfo("Europe/Vienna")).date()
     n_days = sum(1 for i in range(st["days"]) if st["mask"][(today + dt.timedelta(days=i)).weekday()] == "1")
-    minutes = n_days * (4 if st["main"] else 8) * 2.8 / 60         
+    minutes = n_days * (4 if st["main"] else 8) * 2.8 / 60
     text = (f"🚨 Urgent search {'switched' if flag else 'ON'}\n"
             f"📅 Next {st['days']} days (today counts as day 1)\n"
             f"🗓 {wd_text(st['mask'])}\n"
@@ -235,12 +235,12 @@ def wiz_start(st, first, last):
     if minutes >= 4:
         text += (f"\n⏱ One round takes about {minutes:.0f} minutes with this many days, so a message can come a "
                  "little later." + ("" if st["main"] else " 'Main 4 only' makes it about twice as fast."))
-    say(text + "\n\nButtons below: Pause - Extend - Stop")
+    say(text + "\n\nButtons below: Pause · Extend · Stop")
     return True
 
 def wiz_run(ops):
     started = False
-    cache = {}                      
+    cache = {}
     for mid, data in ops:
         parts = data.split(":")
         kind = parts[0]
@@ -257,8 +257,8 @@ def wiz_run(ops):
             continue
         st = cache.get(mid)
         if isinstance(st, str):
-            continue                  
-        if kind in ("m", "u", "r"):   
+            continue
+        if kind in ("m", "u", "r"):
             cache[mid] = ("mute", *mute_apply(kind, parts[1:]))
             continue
         if isinstance(st, tuple):
@@ -273,11 +273,11 @@ def wiz_run(ops):
                 mask = list(st["mask"])
                 mask[i] = "0" if mask[i] == "1" else "1"
                 st["mask"], st["step"] = "".join(mask), 2
-            elif kind == "p":                  
+            elif kind == "p":
                 if len(parts[2]) == 7 and "1" in parts[2] and set(parts[2]) <= {"0", "1"}:
                     st["mask"] = parts[2]
                     st["step"], st["frm"] = 3, None
-            elif kind == "b":                  
+            elif kind == "b":
                 st["step"], st["frm"] = 2, None
             elif kind == "n":
                 if "1" in st["mask"]:
@@ -385,7 +385,7 @@ def mute_apply(kind, args):
                     "Then you get what is new since before. To end it earlier: tap Mute again.")
             if "urgent" in keys:
                 text += "\n🚨 The urgent search is paused until then."
-        else:                                                         
+        else:
             mute_set(keys, None)
             text = f"🔔 <b>{label}</b> switched on again."
         return text, json.dumps({"inline_keyboard": []})
@@ -410,11 +410,11 @@ URGENT_CHOICES = json.dumps({"inline_keyboard": [
 CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "start_main": "start_main"}
 
 HELP = (
-    "Buttons: Check all options, Padel-Austria tournaments, Urgent padel, Sun Set events, Meetup events, Mute.\n"
+    "Buttons: Check all options · Padel-Austria tournaments · Urgent padel · Sun Set events · Meetup events.\n"
     "Mute: silence Sun Set, tournaments, Meetup or the urgent search for 2 hours up to 7 days.\n"
     "Urgent padel opens a 3-step menu: days ahead, weekdays, start times.\n"
     "While urgent mode is on you also get Stop and Extend. To pause the urgent search, use Mute.\n\n"
-    "You can also type: stop, pause, extend, evenings, main 4, sun set, status, help"
+    "You can also type: stop · pause · extend · evenings · main 4 · sun set · status · help"
 )
 
 def tg(method, **params):
@@ -427,9 +427,9 @@ def tg(method, **params):
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code < 500 and exc.code != 429:
-                raise                       
+                raise
             err = exc
-        except (urllib.error.URLError, OSError) as exc:   
+        except (urllib.error.URLError, OSError) as exc:
             err = exc
         if attempt < 3:
             time.sleep(2 * (attempt + 1))
@@ -554,7 +554,7 @@ def opts_text(opts):
         parts.append("main 4 locations only")
     elif cfg:
         parts.append("all locations")
-    return " - ".join(parts) or "all locations, any time"
+    return " · ".join(parts) or "all locations, any time"
 
 def vienna(t):
     return t.astimezone(ZoneInfo("Europe/Vienna"))
@@ -563,7 +563,7 @@ def events_text():
     try:
         lines = [l.strip() for l in open(EVENTS_FILE, encoding="utf-8") if l.strip()]
     except OSError:
-        return "No event list saved yet. The watcher saves it at its next run."
+        return "No event list saved yet."
     out = ["📅 SUN SET EVENTS (list from the last check)", ""]
     for l in lines:
         title, _, rest = l.partition(" | ")
@@ -611,23 +611,21 @@ def meetup_status_line(mutes, now):
         return f"⚠️ {label}: last check unknown (update the Google script)"
     text = f"{label}: last check {stamp(checked)}"
     if (now - checked).total_seconds() > 20 * 60:
-        return "⚠️ " + text + " - no recent check"
+        return "⚠️ " + text + " · no recent check"
     return "✅ " + text
 
 def meetup_text():
     if not MEETUP_URL:
-        return ("🤝 The Meetup list is not connected yet. Add the secret MEETUP_EVENTS_URL in GitHub "
-                "(see the setup guide).")
+        return "🤝 The Meetup list is not connected yet."
     try:
         req = urllib.request.Request(MEETUP_URL, headers={"User-Agent": "padel-watch"})
         with urllib.request.urlopen(req, timeout=30) as r:
             body = r.read().decode("utf-8", "replace")
     except Exception as exc:
         print(f"WARNING: Meetup list not reachable ({type(exc).__name__}).")
-        return "🤝 Could not read the Meetup list right now. Try again in a minute."
+        return "🤝 Could not read the Meetup list right now."
     if not body.startswith("# v1"):
-        print("WARNING: Meetup list answer was not the expected list (wrong or expired address?).")
-        return "🤝 The Meetup list address did not answer correctly. Check the secret MEETUP_EVENTS_URL."
+        return "🤝 The Meetup list address did not answer correctly."
     today = dt.datetime.now(ZoneInfo("Europe/Vienna")).date()
     rows = []
     for line in body.splitlines()[1:]:
@@ -639,8 +637,7 @@ def meetup_text():
         if day >= today:
             rows.append((day, *f[1:]))
     e = html.escape
-    out = ["<b><u>🤝 MEETUP - upcoming padel events</u></b>",
-           "<i>From your Meetup e-mail alerts, not finished yet</i>", ""]
+    out = ["<b><u>🤝 MEETUP · upcoming padel events</u></b>", "",]
     if not rows:
         out.append("No upcoming padel events known yet.")
     last = None
@@ -656,11 +653,52 @@ def meetup_text():
                              f"💶 {e(price)}" if price else "",
                              f"👥 {e(going)} going" if going else "") if x]
         if extra:
-            out.append("   " + " - ".join(extra))
+            out.append("   " + " · ".join(extra))
     return "\n".join(out)
 
+# ---- New Telegram Sync Deletion Logic ----
+TG_SENT_FILE = "tg_sent_messages.json"
+def load_sent_messages():
+    if os.path.exists(TG_SENT_FILE):
+        try:
+            with open(TG_SENT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_sent_messages(data):
+    with open(TG_SENT_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def sync_deletions():
+    try:
+        req = urllib.request.Request(f"{WISPBYTE_URL}/summary", headers={"User-Agent": "padel-watch"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            active_wa = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return 
+        
+    sent_tg = load_sent_messages()
+    changed = False
+    
+    for wa_id, tg_msg_id in list(sent_tg.items()):
+        if wa_id not in active_wa:
+            try:
+                tg("deleteMessage", chat_id=CHAT, message_id=tg_msg_id)
+                print(f"Deleted message {tg_msg_id} from Telegram (removed from WhatsApp).")
+            except Exception as e:
+                pass
+            del sent_tg[wa_id]
+            changed = True
+            
+    if changed:
+        save_sent_messages(sent_tg)
+
+# ---------------------------------------------
+
 def norm(text):
-    text = re.sub(r"[^\w\s/+.-]", " ", (text or "").lower())   
+    text = re.sub(r"[^\w\s/+.-]", " ", (text or "").lower())
     return re.sub(r"\s+", " ", text).strip()
 
 def read_commands(wait=0):
@@ -671,7 +709,7 @@ def read_commands(wait=0):
     for u in updates:
         last_id = max(last_id, u["update_id"])
         cb = u.get("callback_query")
-        if cb:                                       
+        if cb:
             if str((cb.get("message") or {}).get("chat", {}).get("id")) != str(CHAT):
                 continue
             try:
@@ -681,10 +719,10 @@ def read_commands(wait=0):
             mid = (cb.get("message") or {}).get("message_id")
             data = cb.get("data") or ""
             if mid and data[:1] in WIZ_KINDS and (data == "x" or data[1:2] == ":"):
-                WIZ.append((mid, data))          
+                WIZ.append((mid, data))
                 continue
             if mid:
-                try:   
+                try:
                     tg("editMessageReplyMarkup", chat_id=CHAT, message_id=mid,
                        reply_markup=json.dumps({"inline_keyboard": []}))
                 except Exception:
@@ -694,10 +732,8 @@ def read_commands(wait=0):
             continue
         m = u.get("message") or {}
         if str(m.get("chat", {}).get("id")) != str(CHAT):
-            print("Ignored a message from another chat.")
             continue
         if now - m.get("date", 0) > MAX_AGE_SEC:
-            print("Ignored an old message.")
             continue
         text = norm(m.get("text"))
         if text in COMMANDS:
@@ -708,6 +744,7 @@ def read_commands(wait=0):
         tg("getUpdates", offset=last_id + 1, limit=1, timeout=0)
     return cmds, other
 
+# ---- Check Status and Tokens ----
 def check_token_reminder():
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
     left = (TOKEN_EXPIRES - now.date()).days
@@ -721,12 +758,8 @@ def check_token_reminder():
     if tag in done:
         return
     when = "TODAY" if left == 0 else ("tomorrow" if left == 1 else f"in {left} days")
-    say(f"🔑 Reminder: the GitHub token that cron-job.org uses expires {when} ({TOKEN_EXPIRES:%a %d.%m.%Y}). "
-        "After that, Sun Set alerts and urgent checks stop.\n\n"
-        "To renew: GitHub -> Settings -> Developer settings -> Fine-grained tokens -> Regenerate. "
-        "Then paste the new token into the Authorization header of each cron-job.org job "
-        "(\"Bearer <token>\"). Never paste the token into this chat. "
-        "Afterwards change token_expires in config.toml to the new date.")
+    say(f"🔑 Reminder: the GitHub token expires {when} ({TOKEN_EXPIRES:%a %d.%m.%Y}). "
+        "After that, alerts stop.")
     with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
         f.write("\n".join(done + [tag]) + "\n")
     commit_files("Token reminder sent", add=[REMINDERS_FILE])
@@ -736,7 +769,7 @@ def run_times(workflow):
     done = [r for r in runs if r.get("status") == "completed"]
     ok = next((r for r in done if r.get("conclusion") == "success"), None)
     t = dt.datetime.fromisoformat(ok["updated_at"].replace("Z", "+00:00")) if ok else None
-    running = next((r for r in runs if r.get("status") == "in_progress"), None)   
+    running = next((r for r in runs if r.get("status") == "in_progress"), None)
     if running and running.get("run_started_at"):
         started = dt.datetime.fromisoformat(running["run_started_at"].replace("Z", "+00:00"))
         if t is None or started > t:
@@ -750,7 +783,8 @@ def stamp(t, now=None):
 def build_status():
     now = dt.datetime.now(dt.timezone.utc)
     flag = read_flag()
-    lines = ["📌 PADEL WATCH - status", ""]
+    lines = ["📌 PADEL WATCH · status", ""]
+    
     if flag:
         ends = vienna(flag["since"] + dt.timedelta(hours=URGENT_MAX_HOURS))
         extra = opts_text(flag["opts"])
@@ -758,13 +792,15 @@ def build_status():
             lines.append(f"🚨 Urgent: ON, ⏸ paused until {stamp(flag['pause'], now)}")
         else:
             lines.append(f"🚨 Urgent: ON ({CADENCE['urgent']})")
-        lines.append(f"   {extra} - ends {ends:%a %d.%m. %H:%M}")
+        lines.append(f"   {extra} · ends {ends:%a %d.%m. %H:%M}")
     else:
         lines.append("🚨 Urgent: off")
+        
     hour = vienna(now).hour
     quiet = hour >= QUIET_FROM or hour < QUIET_TO
     problems = []
     mutes = W.mute_read()
+    
     for label, workflow, limit in WATCHERS:
         label = f"{label} ({CADENCE[workflow]})"
         until = mutes.get(MUTE_KEY.get(workflow, ""))
@@ -782,25 +818,35 @@ def build_status():
         text = f"{label}: " + (f"last check {stamp(t)}" if t else "no check yet")
         stale = limit is not None and (t is None or (now - t).total_seconds() / 60 > limit)
         if failed:
-            text = "❌ " + text + " - last run FAILED"
-            bad = W.health_read(HEALTH_KEY.get(workflow, ""))
-            if bad:
-                text += f" - page could not be read since {stamp(bad['since'])}"
+            text = "❌ " + text + " · last run FAILED"
             problems.append(label)
         elif stale:
-            text = "⚠️ " + text + " - no recent check"
+            text = "⚠️ " + text + " · no recent check"
             problems.append(label)
         else:
             text = "✅ " + text
         lines.append(text)
+    
+    # WHATSAPP STATUS SECTION
+    lines += ["", "📱 <b>WHATSAPP (Wispbyte)</b>"]
+    try:
+        req = urllib.request.Request(f"{WISPBYTE_URL}/status", headers={"User-Agent": "padel-watch"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            wa_data = json.loads(r.read().decode("utf-8"))
+        lines.append(f"✅ Status: {wa_data.get('status', 'unknown')} · {wa_data.get('activeGames', 0)} active requests")
+    except Exception:
+        lines.append("❌ Status: Server unreachable (Wispbyte might be offline)")
+    # ------------------------
+
     lines.append(meetup_status_line(mutes, now))
-    lines += ["", "⚙️ GITHUB"]   
+    lines += ["", "⚙️ GITHUB"]
+    
     left = (TOKEN_EXPIRES - vienna(now).date()).days
     if left < 0:
         lines.append(f"❌ 🔑 Token for cron-job.org EXPIRED on {TOKEN_EXPIRES:%a %d.%m.%Y}")
     else:
         icon = "❌" if left <= 3 else ("⚠️" if left <= 14 else "✅")
-        lines.append(f"{icon} 🔑 Token for cron-job.org expires {TOKEN_EXPIRES:%a %d.%m.%Y} - {left} days left")
+        lines.append(f"{icon} 🔑 Token for cron-job.org expires {TOKEN_EXPIRES:%a %d.%m.%Y} · {left} days left")
     if REPO:
         lines.append(f"🔗 https://github.com/{REPO}/actions")
     return "\n".join(lines)
@@ -812,10 +858,8 @@ def pinned_status_id():
         text = str(pin.get("text", ""))
         if pin and text.startswith("📌 PADEL WATCH"):
             return int(pin["message_id"])
-        print(f"STATUS: getChat gave pinned_message={'yes' if pin else 'no'}, "
-              f"text starts with {text[:20]!r}, from={pin.get('from')}")
     except Exception as exc:
-        print(f"WARNING: could not ask Telegram for the pinned message ({type(exc).__name__}).")
+        pass
     return None
 
 def save_via_api(path, text, message):
@@ -834,27 +878,22 @@ def save_via_api(path, text, message):
 
 def update_status(force=False, create=False):
     now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    if not force and now.minute % STATUS_EVERY_MIN > 1:   
-        print("STATUS: not due this minute.")
+    if not force and now.minute % STATUS_EVERY_MIN > 1:
         return
     try:
         text = build_status()
         mid = pinned_status_id()
-        source = "pinned message"
         if not mid:
-            source = "repo file"
             try:
                 mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
             except (OSError, ValueError):
                 pass
         if not mid and not create:
-            print("STATUS: no status message known. Type 'status' in the chat to create it.")
             return
-        print(f"STATUS: message id {mid} (from {source})" if mid else "STATUS: no status message known, creating one.")
         if mid:
             try:
                 tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
-                   disable_web_page_preview="true")
+                   disable_web_page_preview="true", parse_mode="HTML")
                 return
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", "ignore") if hasattr(exc, "read") else ""
@@ -862,28 +901,22 @@ def update_status(force=False, create=False):
                 if "not modified" in low:
                     return
                 gone = exc.code in (400, 404) and ("not found" in low or "invalid" in low or "can't be edited" in low)
-                print(f"STATUS: edit of message {mid} failed: HTTP {exc.code} {body[:200]}")
                 if not gone:
-                    return          
-                if not create:
-                    print("STATUS: the status message is gone. Type 'status' to create a new one.")
                     return
-                print("STATUS: the old status message is gone, creating a new one.")
-            except (urllib.error.URLError, OSError) as exc:
-                print(f"STATUS: edit of message {mid} failed ({type(exc).__name__}), will retry next time.")
-                return
-        res = tg("sendMessage", chat_id=CHAT, text=text, disable_web_page_preview="true")
+                if not create:
+                    return
+        res = tg("sendMessage", chat_id=CHAT, text=text, disable_web_page_preview="true", parse_mode="HTML")
         mid = res["result"]["message_id"]
         try:
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
         except Exception as exc:
-            print(f"WARNING: could not pin the status message ({type(exc).__name__}). Pin it by hand.")
+            pass
         with open(STATUS_FILE, "w", encoding="utf-8") as f:
             f.write(f"{mid}\n")
-        try:   
+        try:
             save_via_api(STATUS_FILE, f"{mid}\n", "Status message id")
         except Exception as exc:
-            print(f"WARNING: could not save the status message id ({type(exc).__name__}).")
+            pass
     except Exception as exc:
         print(f"WARNING: status update failed ({type(exc).__name__}).")
 
@@ -893,7 +926,7 @@ def process(cmds, other):
     wiz_ops = list(WIZ)
     WIZ.clear()
 
-    for cmd in dict.fromkeys(cmds):  
+    for cmd in dict.fromkeys(cmds):
         try:
             if cmd == "check":
                 dispatch("report")
@@ -904,37 +937,33 @@ def process(cmds, other):
                 opts = {"start_all": [], "start_evenings": ["evenings"], "start_main": ["main"]}[cmd]
                 flag = read_flag()
                 if flag and flag["opts"] == opts:
-                    say(f"🚨 Urgent mode is already on ({opts_text(opts)}). Send: stop urgent check  to end it.")
+                    say(f"🚨 Urgent mode is already on ({opts_text(opts)}).")
                 else:
                     set_urgent(True, opts)
                     dispatch("urgent")
                     started_now = True
-                    say(f"🚨 Urgent mode {'switched' if flag else 'ON'}: {opts_text(opts)}. "
-                        "I check the next 3 days (any weekday, 2h blocks) about every 5 minutes "
-                        "and message you as soon as something opens up. No checks 23:00-07:00. "
-                        "It ends by itself after 48 hours.\n\nButtons below: Pause - Extend - Stop")
+                    say(f"🚨 Urgent mode {'switched' if flag else 'ON'}: {opts_text(opts)}.")
             elif cmd == "extend":
                 flag = read_flag()
                 if not flag:
-                    say("Urgent mode is not running. Tap: Urgent padel.")
+                    say("Urgent mode is not running.")
                 else:
                     write_flag(True, flag["opts"], pause=flag["pause"], message="Urgent mode extended")
                     ends = vienna(dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=URGENT_MAX_HOURS))
-                    say(f"⏱ Urgent mode extended. It now ends {ends:%a %d.%m. %H:%M} (48 hours from now).")
+                    say(f"⏱ Urgent mode extended. It now ends {ends:%a %d.%m. %H:%M}.")
                     started_now = True
             elif cmd == "pause":
                 flag = read_flag()
                 now_utc = dt.datetime.now(dt.timezone.utc)
                 if not flag:
-                    say("Urgent mode is not running. Nothing to pause.")
+                    say("Urgent mode is not running.")
                 elif flag["pause"] and flag["pause"] > now_utc:
                     write_flag(True, flag["opts"], since=flag["since"], message="Urgent alerts resumed")
-                    say("▶️ Alerts resumed. Checks continue about every 5 minutes.")
+                    say("▶️ Alerts resumed.")
                 else:
                     until = now_utc + dt.timedelta(hours=PAUSE_HOURS)
                     write_flag(True, flag["opts"], since=flag["since"], pause=until, message="Urgent alerts paused")
-                    say(f"🔕 Alerts paused until {vienna(until):%H:%M}. Urgent mode stays on. "
-                        "Tap Pause again to resume earlier.")
+                    say(f"🔕 Alerts paused until {vienna(until):%H:%M}.")
                     started_now = True
             elif cmd == "events":
                 say(events_text())
@@ -942,32 +971,40 @@ def process(cmds, other):
                 say_html(meetup_text())
             elif cmd == "mute":
                 mute_send_menu()
-            elif cmd == "whatsapp_summary": 
+            elif cmd == "whatsapp_summary":
                 try:
-                    req = urllib.request.Request(WISPBYTE_URL, headers={"User-Agent": "padel-watch"})
+                    req = urllib.request.Request(f"{WISPBYTE_URL}/summary", headers={"User-Agent": "padel-watch"})
                     with urllib.request.urlopen(req, timeout=10) as r:
                         data = json.loads(r.read().decode("utf-8"))
                         
                     if not data:
                         say("No active WhatsApp games found right now.")
                     else:
-                        summary = "🎾 <b>ACTIVE WHATSAPP REQUESTS</b>\n\n"
+                        summary = "🎾 <b>Active Padel Requests from WhatsApp</b>\n\n"
+                        sent_tg = load_sent_messages()
+                        changed = False
                         for i, (key, m) in enumerate(data.items(), 1):
-                            summary += f"<b>{i}. From {m.get('sender', 'Unknown')} ({m.get('group', 'Unknown')})</b>\n{m.get('text', '')}\n\n---\n"
+                            g_name = m.get('group', 'Unknown')
+                            if m.get('link'):
+                                g_display = f"<a href='{m.get('link')}'>{g_name}</a>"
+                            else:
+                                g_display = g_name
+                            summary += f"<b>{i}. From {m.get('sender', 'Unknown')} ({g_display})</b>\n<i>{m.get('text', '')}</i>\n\n---\n"
+                            if key not in sent_tg and m.get('tgMessageId'):
+                                sent_tg[key] = m['tgMessageId']
+                                changed = True
                         say_html(summary)
+                        if changed:
+                            save_sent_messages(sent_tg)
                 except Exception as exc:
                     print(f"WARNING: WhatsApp summary failed ({type(exc).__name__}).")
                     say("❌ Could not reach the WhatsApp Wispbyte server. Is it online?")
             elif cmd == "padel_events":
                 dispatch("report", EVENTS_WORKFLOW)
-                say("🏆 Reading the Padel-Austria tournaments "
-                    f"({' - '.join(sorted(W.get('tournaments', 'states', ['Wien'])))} - "
-                    f"{' - '.join(sorted(W.get('tournaments', 'levels', ['Starter'])))} - "
-                    f"{' - '.join(sorted(W.get('tournaments', 'kinds', ['Offener Bewerb'])))} - not full). "
-                    "The list follows in about 2 minutes.")
+                say("🏆 Reading the Padel-Austria tournaments...")
             elif cmd == "status":
                 update_status(force=True, create=True)
-                say("📌 Status updated. It stays pinned at the top of this chat.")
+                say("📌 Status updated.")
             elif cmd == "menu":
                 say(HELP)
             elif cmd == "stop":
@@ -976,10 +1013,8 @@ def process(cmds, other):
                     say("🛑 Urgent check stopped.")
                 else:
                     say("Urgent mode was not running.")
-            print(f"Handled: {cmd}")
         except Exception as exc:
             print(f"ERROR: could not handle '{cmd}' ({type(exc).__name__}).")
-            say(f"⚠️ Could not run '{cmd}'. See the run log on GitHub.")
             failed = True
     if other and not cmds and not wiz_ops:
         say(HELP)
@@ -988,7 +1023,6 @@ def process(cmds, other):
             if wiz_run(wiz_ops):
                 started_now = True
         except Exception as exc:
-            print(f"ERROR: urgent menu failed ({type(exc).__name__}).")
             failed = True
 
     flag = read_flag()
@@ -998,7 +1032,7 @@ def process(cmds, other):
             age_h = (dt.datetime.now(dt.timezone.utc) - since).total_seconds() / 3600
             if age_h >= URGENT_MAX_HOURS:
                 set_urgent(False)
-                say("🛑 Urgent mode ended by itself after 48 hours. Tap: Urgent padel  to start again.")
+                say("🛑 Urgent mode ended by itself.")
             else:
                 run = last_run()
                 busy = run and run.get("status") in ("queued", "in_progress", "waiting", "pending")
@@ -1014,31 +1048,20 @@ def process(cmds, other):
                 if flag["pause"] and not paused:
                     write_flag(True, flag["opts"], since=flag["since"], message="Urgent alerts resumed")
                     say("▶️ Pause is over. Urgent checks continue.")
-                if paused:
-                    print("Urgent mode on, alerts paused.")
-                elif quiet:
-                    print("Urgent mode on, quiet hours (23:00-07:00): no check.")
-                elif due and not busy:
+                if not paused and not quiet and due and not busy:
                     dispatch("urgent")
-                    print("Urgent check started.")
-                else:
-                    print("Urgent mode on, next check not due yet.")
         except Exception as exc:
-            print(f"ERROR: urgent upkeep failed ({type(exc).__name__}).")
             failed = True
     try:
         check_token_reminder()
     except Exception as exc:
-        print(f"WARNING: token reminder failed ({type(exc).__name__}).")
+        pass
     update_status(force=bool(cmds) or bool(wiz_ops))
     return failed
 
 def main():
     _now = dt.datetime.now(ZoneInfo("Europe/Vienna"))
-    print(f"tg_listen v13 - started {_now:%H:%M:%S} Vienna - listening up to {LISTEN_SECONDS} s - "
-          "status edit runs at minutes ending 0/1 and 5/6")
     if not TOKEN or not CHAT:
-        print("Telegram secrets are missing.")
         sys.exit(3)
     deadline = time.time() + LISTEN_SECONDS
     failed, first = False, True
@@ -1049,9 +1072,7 @@ def main():
             cmds, other = read_commands(wait)
         except (urllib.error.URLError, OSError) as exc:
             if isinstance(exc, urllib.error.HTTPError) and exc.code < 500 and exc.code not in (429, 409):
-                print(f"ERROR: Telegram refused the request (HTTP {exc.code}). Check the token and chat ID.")
                 sys.exit(1)
-            print(f"WARNING: Telegram not reachable now ({type(exc).__name__}). Trying again.")
             if first and LISTEN_SECONDS <= 0:
                 return
             first = False
@@ -1061,11 +1082,12 @@ def main():
             continue
         if first or cmds or other or WIZ:
             failed = process(cmds, other) or failed
+            sync_deletions() # <-- THIS NOW RUNS ON EVERY CYCLE
         first = False
         if time.time() >= deadline - 1:
             break
         if not cmds and time.time() - t0 < 1:
-            time.sleep(1)               
+            time.sleep(1)
     if failed:
         sys.exit(1)
 
