@@ -904,8 +904,7 @@ def update_status(force=False, create=False):
                 mid = int(open(STATUS_FILE, encoding="utf-8").read().strip())
             except (OSError, ValueError):
                 pass
-        if not mid and not create:
-            return
+                
         if mid:
             try:
                 tg("editMessageText", chat_id=CHAT, message_id=mid, text=text,
@@ -916,23 +915,33 @@ def update_status(force=False, create=False):
                 low = body.lower()
                 if "not modified" in low:
                     return
-                gone = exc.code in (400, 404) and ("not found" in low or "invalid" in low or "can't be edited" in low)
-                if not gone:
-                    return
-                if not create:
-                    return
+                # If the message was deleted, we MUST create a new one, even if create=False
+                if "not found" in low or "invalid" in low or "can't be edited" in low:
+                    print("STATUS: old message was deleted. Creating a new one...")
+                    create = True # Force creation
+                else:
+                    return # Temporary error, don't create a duplicate
+                    
+        if not mid and not create:
+            return
+            
+        # Create a new message
         res = tg("sendMessage", chat_id=CHAT, text=text, disable_web_page_preview="true", parse_mode="HTML")
         mid = res["result"]["message_id"]
+        
         try:
             tg("pinChatMessage", chat_id=CHAT, message_id=mid, disable_notification="true")
-        except Exception as exc:
+        except Exception:
             pass
+            
         with open(STATUS_FILE, "w", encoding="utf-8") as f:
             f.write(f"{mid}\n")
+            
         try:
             save_via_api(STATUS_FILE, f"{mid}\n", "Status message id")
-        except Exception as exc:
+        except Exception:
             pass
+            
     except Exception as exc:
         print(f"WARNING: status update failed ({type(exc).__name__}).")
 
