@@ -1,0 +1,8 @@
+{
+  "quiet_from": 23,
+  "quiet_to": 7,
+  "weekdays": [],
+  "include_words": [],
+  "exclude_words": [],
+  "dedupe_similarity": 0.85
+}

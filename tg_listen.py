@@ -664,12 +664,21 @@ def wa_get(path, timeout=10):
 
 def wa_summary_text(data):
     """Telegram HTML for the list of open requests. Everything from WhatsApp is escaped."""
-    out = ["🎾 <b>Active Padel Requests from WhatsApp</b>\n"]
-    for i, m in enumerate(data.values(), 1):
-        g = html.escape(str(m.get("group", "Unknown")))
-        link = str(m.get("link") or "")
+    def group_html(name, link):
+        g = html.escape(str(name or "Unknown"))
+        link = str(link or "")
         if re.fullmatch(r"https://chat\.whatsapp\.com/[A-Za-z0-9]+", link):
             g = f'<a href="{link}">{g}</a>'
+        return g
+
+    out = ["🎾 <b>Active Padel Requests from WhatsApp</b>\n"]
+    for i, m in enumerate(data.values(), 1):
+        g = group_html(m.get("group"), m.get("link"))
+        also = [group_html(a.get("name"), a.get("link")) for a in (m.get("also") or []) if isinstance(a, dict)]
+        if also:
+            g += " + " + ", ".join(also)
+        if m.get("queued"):
+            g += " · 🌙 waiting for the morning digest"
         out.append(f"<b>{i}. From {html.escape(str(m.get('sender', 'Unknown')))} ({g})</b>\n"
                    f"<i>{html.escape(str(m.get('text', '')))}</i>\n\n---")
     return "\n".join(out)
@@ -811,7 +820,16 @@ def build_status():
     else:
         try:
             wa_data = wa_get("/status", timeout=5)
-            lines.append(f"✅ Status: {html.escape(str(wa_data.get('status', 'online')))} · {int(wa_data.get('activeGames', 0))} active requests")
+            n = int(wa_data.get("activeGames", 0))
+            state = str(wa_data.get("whatsapp", "unknown"))
+            if state == "logged_out":
+                lines.append("❌ WhatsApp logged the bridge out: scan the QR code again on the server")
+            elif state == "reconnecting":
+                lines.append(f"⚠️ Server online, WhatsApp reconnecting · {n} active requests")
+            else:
+                lines.append(f"✅ Status: online · {n} active requests")
+            if int(wa_data.get("queued", 0) or 0):
+                lines.append(f"🌙 {int(wa_data['queued'])} request(s) waiting for the morning digest")
         except Exception:
             lines.append("❌ Status: Wispbyte server unreachable or key wrong")
     # ------------------------
