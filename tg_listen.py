@@ -127,7 +127,6 @@ def keyboard():
         "is_persistent": True,
     })
 
-# (Wizard and Mute menu code stays exactly the same as in your previous version)
 WIZ_KINDS = ("d", "t", "p", "n", "f", "o", "g", "b", "x", "m", "u", "r")
 WIZ = []
 WIZ_EARLIEST = [7, 9, 12, 16, 17, 18]
@@ -402,11 +401,6 @@ def mute_send_menu():
     except Exception as exc:
         print(f"WARNING: could not send the mute menu ({type(exc).__name__}).")
 
-URGENT_CHOICES = json.dumps({"inline_keyboard": [
-    [{"text": "🚨 All locations, any time", "callback_data": "start_all"}],
-    [{"text": "🌙 Evenings only (from 17:00)", "callback_data": "start_evenings"}],
-    [{"text": "🏠 Main 4 locations only", "callback_data": "start_main"}],
-]})
 CALLBACKS = {"start_all": "start_all", "start_evenings": "start_evenings", "start_main": "start_main"}
 
 HELP = (
