@@ -30,3 +30,13 @@ os.remove("status_msg.txt"); run("id file lost, still pinned -> edit only")
 EDIT_ERR = "Bad Request: message to edit not found"; run("message deleted, automatic run -> nothing")
 run("message deleted, you type 'status' -> create new", create=True)
 EDIT_ERR = "Bad Request: message is not modified"; run("not modified -> nothing")
+
+# a network timeout while editing the status must NOT send a "Status generation failed" message
+def timeout_tg(method, **p):
+    calls.append(method)
+    if method == "getChat": return {"result": {"pinned_message": PIN}}
+    if method == "editMessageText": raise TimeoutError("timed out")
+    return {}
+L.tg = timeout_tg; EDIT_ERR = ""
+run("network timeout while editing -> no error message")
+assert "sendMessage" not in calls, calls
